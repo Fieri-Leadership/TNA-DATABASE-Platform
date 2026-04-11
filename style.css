@@ -1,0 +1,257 @@
+/* ═══════════════════════════════════════════════════════════════
+   QA Analysis Portal — Custom Styles
+   Edit --primary and --accent to match your brand colours.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+    --primary:      #1a56db;
+    --primary-dark: #1342b0;
+    --accent:       #e74c3c;
+    --surface:      #f8f9fc;
+    --border:       #e2e8f0;
+    --text:         #1e293b;
+    --muted:        #64748b;
+    --success:      #10b981;
+    --radius:       8px;
+    --font:         'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* ── Global ── */
+html, body, [class*="css"] {
+    font-family: var(--font);
+    color: var(--text);
+}
+
+/* ── Sidebar brand block ── */
+.sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 0 8px 0;
+}
+.brand-logo {
+    font-size: 2rem;
+    line-height: 1;
+}
+.brand-name {
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--primary);
+    letter-spacing: -0.3px;
+}
+.brand-tagline {
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+/* ── Page title ── */
+.page-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.5px;
+    margin-bottom: 1.25rem;
+}
+
+/* ── Job header bar ── */
+.job-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    margin-bottom: 1rem;
+}
+.job-code {
+    font-weight: 700;
+    font-size: 0.9rem;
+    letter-spacing: 0.5px;
+    color: var(--primary);
+    background: #eff6ff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-right: 10px;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+.job-client {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+}
+.job-sector {
+    font-size: 0.78rem;
+    color: var(--muted);
+    background: #f1f5f9;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 2px 10px;
+}
+
+/* ── Mode badges ── */
+.mode-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 20px;
+    margin-bottom: 4px;
+}
+.mode-badge.auto {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+}
+.mode-badge.manual {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    color: #14532d;
+}
+
+/* ── Question label ── */
+.question-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text);
+    margin: 12px 0 4px 0;
+    line-height: 1.4;
+}
+.ai-tag {
+    background: var(--primary);
+    color: white;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    vertical-align: middle;
+    margin-left: 6px;
+}
+
+/* ── Question bank items ── */
+.q-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    font-size: 0.87rem;
+    margin-bottom: 4px;
+    color: var(--text);
+}
+
+/* ── Textarea polish ── */
+textarea {
+    border-radius: var(--radius) !important;
+    border: 1px solid var(--border) !important;
+    font-size: 0.88rem !important;
+    line-height: 1.55 !important;
+    transition: border-color 0.15s !important;
+}
+textarea:focus {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(26,86,219,0.1) !important;
+}
+
+/* ── Streamlit button overrides ── */
+div.stButton > button[kind="primary"] {
+    background-color: var(--primary) !important;
+    border-color: var(--primary) !important;
+    border-radius: var(--radius) !important;
+    font-weight: 600 !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.2px !important;
+    transition: background 0.15s !important;
+}
+div.stButton > button[kind="primary"]:hover {
+    background-color: var(--primary-dark) !important;
+}
+div.stButton > button[kind="secondary"] {
+    border-radius: var(--radius) !important;
+    font-size: 0.85rem !important;
+}
+
+/* ── Tabs ── */
+button[data-baseweb="tab"] {
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+}
+
+/* ── Info / success / warning boxes ── */
+div.stAlert {
+    border-radius: var(--radius) !important;
+    font-size: 0.87rem !important;
+}
+
+/* ── Download button ── */
+div.stDownloadButton > button {
+    border-radius: var(--radius) !important;
+    font-size: 0.85rem !important;
+}
+
+/* ── Sidebar refinements ── */
+section[data-testid="stSidebar"] > div:first-child {
+    padding-top: 1.2rem !important;
+}
+
+/* ── Answer type badges ── */
+.type-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 3px;
+    letter-spacing: 0.4px;
+    vertical-align: middle;
+    margin-left: 6px;
+    text-transform: uppercase;
+}
+.type-badge.text {
+    background: #f0fdf4;
+    color: #166534;
+    border: 1px solid #86efac;
+}
+.type-badge.likert {
+    background: #eff6ff;
+    color: #1e40af;
+    border: 1px solid #93c5fd;
+}
+
+/* ── Likert radio row ── */
+div[data-testid="stRadio"] > div {
+    gap: 6px !important;
+    flex-wrap: wrap;
+}
+div[data-testid="stRadio"] label {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 7px 14px !important;
+    font-size: 0.82rem !important;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+div[data-testid="stRadio"] label:hover {
+    border-color: var(--primary);
+    background: #eff6ff;
+}
+div[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) {
+    border-color: var(--primary) !important;
+    background: #eff6ff !important;
+    color: var(--primary) !important;
+    font-weight: 700 !important;
+}
+
+
+hr {
+    border: none !important;
+    border-top: 1px solid var(--border) !important;
+    margin: 1rem 0 !important;
+}
