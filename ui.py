@@ -334,6 +334,7 @@ def render_qa_page(job_code, page_key, job):
         )
 
     st.markdown("---")
+    st.info(PAGE_CONFIG[page_key]["description"], icon="ℹ️")
 
     # ── Q&A fields ───────────────────────────────────────────────────────
     draft = {}
