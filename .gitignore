@@ -2,3 +2,4 @@
 ./venv/*
 .env
 migrate_to_turso.py
+backup/*
