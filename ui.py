@@ -6,7 +6,7 @@ import streamlit as st
 from database import (
     create_job, get_all_jobs, get_job, update_job, delete_job,
     get_questions, add_question, delete_question, update_question_type,
-    get_answers, save_answer, clear_answers,
+    update_question, get_answers, save_answer, clear_answers,
     get_research_topics, add_research_topic, delete_research_topic,
     get_research_items, add_research_item, update_research_item, delete_research_item,
 )
@@ -129,7 +129,7 @@ def render_admin_page():
             job = get_job(job_code_sel)
 
             if job:
-                job_code_d, client_name_d, description_d, sector_d,cohort_size_d, created, updated = job
+                job_code_d, client_name_d, description_d, sector_d, created, updated, cohort_size_d = job
                 st.markdown(f"<small>Created: {created[:10]} · Updated: {updated[:10]}</small>",
                             unsafe_allow_html=True)
                 col1, col2 = st.columns(2)
@@ -177,10 +177,23 @@ def render_admin_page():
                                 format_func=lambda k: PAGE_CONFIG[k]["label"])
 
         questions = get_questions(page_sel)
-        for qid, qtext, pos, ans_type in questions:
-            col_q, col_type, col_del = st.columns([7, 2, 1])
+        for qid, qtext, pos, subsection, ans_type in questions:
+            col_q, col_sub, col_type, col_del = st.columns([5, 2, 2, 1])
             with col_q:
-                st.markdown(f"<div class='q-item'>{pos + 1}. {qtext}</div>", unsafe_allow_html=True)
+                new_qtext = st.text_input(
+                    "Question",
+                    value=qtext,
+                    key=f"qtext_{qid}",
+                    label_visibility="collapsed",
+                )
+            with col_sub:
+                new_sub = st.text_input(
+                    "Subsection",
+                    value=subsection or "",
+                    key=f"qsub_{qid}",
+                    label_visibility="collapsed",
+                    placeholder="Subsection label…",
+                )
             with col_type:
                 type_options = list(ANSWER_TYPES.keys())
                 current_idx = type_options.index(ans_type) if ans_type in type_options else 0
@@ -196,14 +209,22 @@ def render_admin_page():
                     update_question_type(qid, new_type)
                     st.rerun()
             with col_del:
-                if st.button("✕", key=f"del_q_{qid}", help="Remove question"):
-                    delete_question(qid)
-                    st.rerun()
+                col_save_q, col_del_q = st.columns(2)
+                with col_save_q:
+                    if st.button("💾", key=f"save_q_{qid}", help="Save changes"):
+                        update_question(qid, new_qtext, new_sub)
+                        st.rerun()
+                with col_del_q:
+                    if st.button("✕", key=f"del_q_{qid}", help="Remove question"):
+                        delete_question(qid)
+                        st.rerun()
 
         st.markdown("---")
-        col_new_q, col_new_type = st.columns([3, 1])
+        col_new_q, col_new_type,col_subsection = st.columns([3, 1,1])
         with col_new_q:
             new_q = st.text_input("Add new question", placeholder="Type question text…")
+        with col_subsection:
+            new_subsection = st.text_input("Add a new subsection",placeholder="Type subsection text..")
         with col_new_type:
             new_type = st.selectbox(
                 "Answer type",
@@ -213,7 +234,7 @@ def render_admin_page():
             )
         if st.button("＋ Add Question", type="primary"):
             if new_q.strip():
-                add_question(page_sel, new_q.strip(), new_type)
+                add_question(page_sel, new_q.strip(), new_subsection,new_type)
                 st.rerun()
             else:
                 st.warning("Question text cannot be empty.")
@@ -247,6 +268,32 @@ def _render_likert(job_code,qid, page_key, existing_value):
     idx = labels.index(selected_label)
     return options[idx]
 
+
+
+def _render_dropdown(job_code, qid, page_key, qtext, existing_value):
+    """Parse options from [opt1, opt2, ...] in question text and render a selectbox."""
+    import re
+    match = re.search(r'\[([^\]]+)\]', qtext)
+    if not match:
+        st.caption("⚠ No options defined. Add them in [option1, option2] format to the question text.")
+        return existing_value
+
+    options = [o.strip() for o in match.group(1).split(",") if o.strip()]
+    options_with_placeholder = ["— Select —"] + options
+    if existing_value in options:
+        current_idx = options_with_placeholder.index(existing_value)
+    else:
+        current_idx = 0
+
+    selected = st.selectbox(
+        f"dropdown_{job_code}_{page_key}_{qid}",
+        options_with_placeholder,
+        index=current_idx,
+        key=f"ans_{job_code}_{page_key}_{qid}",
+        label_visibility="collapsed",
+    )
+
+    return "" if selected == "— Select —" else selected
 
 # ════════════════════════════════════════════════════════════════════════════
 #  JOB PAGES (Client / Learner / Manager)
@@ -338,24 +385,29 @@ def render_qa_page(job_code, page_key, job):
 
     # ── Q&A fields ───────────────────────────────────────────────────────
     draft = {}
-    for qid, qtext, pos, ans_type in questions:
+    for qid, qtext, pos, subsection, ans_type in questions:
         existing = answers.get(qid, {}).get("answer", "")
         ans_mode = answers.get(qid, {}).get("mode", "")
 
-        type_badge = (
-            '<span class="type-badge likert">Likert</span>'
-            if ans_type == "likert"
-            else '<span class="type-badge text">Text</span>'
-        )
+        type_badge = {
+            "likert":   '<span class="type-badge likert">Likert</span>',
+            "dropdown": '<span class="type-badge dropdown">Dropdown</span>',
+        }.get(ans_type, '<span class="type-badge text">Text</span>')
+
+        subsection_badge = f' <span class="type-badge subsection">{subsection}</span>'
         ai_badge = ' <span class="ai-tag">AI</span>' if ans_mode == "Automatic" else ""
 
+        import re as _re
+        _display_text = _re.sub(r'\s*\[[^\]]*\]', '', qtext).strip()
         st.markdown(
-            f'<div class="question-label">{pos + 1}. {qtext} {type_badge}{ai_badge}</div>',
+            f'<div class="question-label">{pos + 1}. {_display_text} {subsection_badge} {type_badge}{ai_badge}</div>',
             unsafe_allow_html=True,
         )
 
         if ans_type == "likert":
             draft[qid] = _render_likert(job_code,qid, page_key, existing)
+        elif ans_type == "dropdown":
+            draft[qid] = _render_dropdown(job_code, qid, page_key, qtext, existing)
         else:
             draft[qid] = st.text_area(
                 f"Answer {pos + 1}",
@@ -383,7 +435,7 @@ def render_qa_page(job_code, page_key, job):
     with col_export:
         # Simple text export
         export_lines = [f"{PAGE_CONFIG[page_key]['label']} — {job_code}\n{'='*50}\n"]
-        for qid, qtext, pos, ans_type in questions:
+        for qid, qtext, pos,subsection, ans_type in questions:
             ans = draft.get(qid, "")
             export_lines.append(f"Q{pos+1}: {qtext}\nA: {ans}\n")
         export_text = "\n".join(export_lines)

@@ -1,2 +1,5 @@
-*__pycache__/*
+__pycache__/*
 ./venv/*
+.env
+qa_portal.db
+migrate_to_turso.py
