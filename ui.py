@@ -124,7 +124,7 @@ def render_admin_page():
             )
             job_code_sel = selected.split(" — ")[0]
             if st.session_state.get("_last_admin_job") != job_code_sel:
-                for k in ["edit_client", "edit_sector", "edit_desc"]:
+                for k in ["edit_client", "edit_sector", "edit_desc","edit_cohort_size"]:
                     st.session_state.pop(k, None)
                     st.session_state["_last_admin_job"] = job_code_sel
             job = get_job(job_code_sel)
@@ -139,7 +139,7 @@ def render_admin_page():
                     new_sector = st.selectbox("Sector", SECTOR_OPTIONS,
                                               index=SECTOR_OPTIONS.index(sector_d) if sector_d in SECTOR_OPTIONS else 0,
                                               key=f"edit_sector_{job_code_d}")
-                    new_cohort_size = st.text_input("Cohort Size",value=cohort_size_d,key="edit_cohort_size")
+                    new_cohort_size = st.text_input("Cohort Size",value=cohort_size_d,key=f"edit_cohort_size_{job_code_d}")
                 with col2:
                     new_desc = st.text_area("Description", value=description_d or "", height=120, key=f"edit_desc_{job_code_d}")
 

@@ -136,7 +136,7 @@ def create_job(job_code, client_name, description, sector,cohort_size):
     with get_conn() as conn:
         conn.execute(
             "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (job_code.upper(), client_name, description, sector, cohort_size ,now, now),
+            (job_code.upper(), client_name, description, sector,now, now, cohort_size),
         )
 
 
@@ -161,7 +161,7 @@ def update_job(job_code, client_name, description, sector,cohort_size):
     with get_conn() as conn:
         conn.execute(
             "UPDATE jobs SET client_name=?, description=?, sector=?, updated_at=?, cohort_size=? WHERE job_code=?",
-            (client_name, description, sector,cohort_size, now, job_code.upper()),
+            (client_name, description, sector,now,cohort_size, job_code.upper()),
         )
 
 
