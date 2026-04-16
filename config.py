@@ -31,6 +31,7 @@ SECTOR_OPTIONS = [
 ANSWER_TYPES = {
     "text":   "Free Text",
     "likert": "Likert Scale",
+    "dropdown": "Drop Down"
 }
 
 # ─── Likert Scale ─────────────────────────────────────────────────────────────
@@ -57,8 +58,8 @@ PAGE_CONFIG = {
         "description": "Questions related to the target trainee population/cohort.",
     },
     "individual_char": {
-        "label": "Individual Characteristics (Avg of the cohort)",
+        "label": "Individual Characteristics",
         "icon":  "👔",
-        "description": "Questions that capture various individual characteristics of the learning population. Usually this information is received from a survey or similar sources. ",
+        "description": "Questions that capture various individual characteristics of the learning population. Usually this information is received from a survey or similar sources but for this dataset it can represent an Avg of the cohort. ",
     },
 }

@@ -1,14 +1,46 @@
 import sqlite3
-import json
+import os
 from datetime import datetime
 from pathlib import Path
 
-DB_PATH = Path("qa_portal.db")
+DB_PATH = "qa_portal.db"
+# Load .env file if present (local dev only)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not installed, rely on real environment variables
 
+TURSO_DB_NAME = os.environ.get("TURSO_DB_NAME", "").strip()
+TURSO_URL   = os.environ.get("TURSO_URL", "").strip()
+TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
+USE_TURSO   = bool(TURSO_URL and TURSO_TOKEN and TURSO_DB_NAME)
 
+from contextlib import contextmanager
+
+@contextmanager
 def get_conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
-
+    if USE_TURSO:
+        DB_PATH = Path(TURSO_DB_NAME)
+        import libsql_experimental as libsql
+        conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            raise
+        finally:
+            conn.close()
+    else:
+        DB_PATH = "qa_portal.db"
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            raise
+        finally:
+            conn.close()
 
 def init_db():
     with get_conn() as conn:
@@ -19,7 +51,8 @@ def init_db():
             description  TEXT,
             sector       TEXT,
             created_at   TEXT,
-            updated_at   TEXT
+            updated_at   TEXT,
+            cohort_size  INT DEFAULT 10
         );
 
         CREATE TABLE IF NOT EXISTS questions (
@@ -110,7 +143,7 @@ def create_job(job_code, client_name, description, sector,cohort_size):
 def get_all_jobs():
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT job_code, client_name, sector,cohort_size created_at FROM jobs ORDER BY created_at DESC"
+            "SELECT job_code, client_name, sector, cohort_size FROM jobs ORDER BY created_at DESC"
         ).fetchall()
     return rows
 
@@ -127,7 +160,7 @@ def update_job(job_code, client_name, description, sector,cohort_size):
     now = datetime.now().isoformat()
     with get_conn() as conn:
         conn.execute(
-            "UPDATE jobs SET client_name=?, description=?, sector=?,cohort_size=?, updated_at=? WHERE job_code=?",
+            "UPDATE jobs SET client_name=?, description=?, sector=?, updated_at=?, cohort_size=? WHERE job_code=?",
             (client_name, description, sector,cohort_size, now, job_code.upper()),
         )
 
@@ -143,20 +176,20 @@ def delete_job(job_code):
 def get_questions(page):
     with get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, question, position, answer_type FROM questions WHERE page=? AND is_active=1 ORDER BY position",
+            "SELECT id, question, position,subsection, answer_type FROM questions WHERE page=? AND is_active=1 ORDER BY position",
             (page,),
         ).fetchall()
     return rows
 
 
-def add_question(page, question_text, answer_type="text"):
+def add_question(page, question_text, subsection_text, answer_type="text"):
     with get_conn() as conn:
         max_pos = conn.execute(
             "SELECT COALESCE(MAX(position), -1) FROM questions WHERE page=?", (page,)
         ).fetchone()[0]
         conn.execute(
-            "INSERT INTO questions (page, position, question, answer_type) VALUES (?, ?, ?, ?)",
-            (page, max_pos + 1, question_text, answer_type),
+            "INSERT INTO questions (page, position, question, subsection,answer_type) VALUES (?, ?, ? , ?, ?)",
+            (page, max_pos + 1, question_text,subsection_text, answer_type),
         )
 
 
@@ -169,6 +202,12 @@ def update_question_type(question_id, answer_type):
     with get_conn() as conn:
         conn.execute("UPDATE questions SET answer_type=? WHERE id=?", (answer_type, question_id))
 
+def update_question(question_id, question_text, subsection):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE questions SET question=?, subsection=? WHERE id=?",
+            (question_text, subsection, question_id)
+        )
 
 # ─── Answer CRUD ─────────────────────────────────────────────────────────────
 
