@@ -64,7 +64,8 @@ def render_sidebar():
             st.markdown("##### Answer Mode")
             mode = st.radio(
                 "Mode",
-                ["Manual", "Automatic (AI)"],
+                ["Manual"],
+                # ["Manual", "Automatic (AI)"], use this instead of the above lien when the AI mode is working.
                 index=0 if st.session_state.mode == "Manual" else 1,
                 label_visibility="collapsed",
             )
