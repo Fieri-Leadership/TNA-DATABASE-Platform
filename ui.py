@@ -15,6 +15,24 @@ from ai_helper import generate_answers
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#  Logo
+# ════════════════════════════════════════════════════════════════════════════
+def render_logo(size="default"):
+    if size == "small":
+        st.image("./assets/logo/Fieri_Leadership.png", width=50)
+    else:    
+        st.image("./assets/logo/Fieri_Leadership.png", width=200)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ════════════════════════════════════════════════════════════════════════════
+def render_theme():
+    css_file_path = "./assets/style.css"
+    with open(css_file_path) as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+# ════════════════════════════════════════════════════════════════════════════
 #  SIDEBAR
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -36,7 +54,7 @@ def render_sidebar():
         st.markdown("---")
 
         # ── Admin button ──
-        if st.button("⚙ Admin / Jobs", use_container_width=True,
+        if st.button("⚙ Admin/Manage", use_container_width=True,
                       type="primary" if st.session_state.current_page == "admin" else "secondary"):
             st.session_state.current_page = "admin"
             st.session_state.current_job = None
@@ -77,6 +95,17 @@ def render_sidebar():
         st.markdown("---")
         st.caption(f"v{BRANDING['version']} · {BRANDING['company_name']}")
 
+# ════════════════════════════════════════════════════════════════════════════
+#  Common Page layout
+# ════════════════════════════════════════════════════════════════════════════
+
+def set_pagelayout():
+    st.set_page_config(
+    page_title="Fieri Leadership and Development - TNA Platform",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 # ════════════════════════════════════════════════════════════════════════════
 #  ADMIN PAGE
@@ -568,3 +597,28 @@ def render_research_base():
                              use_container_width=True):
                     delete_research_item(item_id)
                     st.rerun()
+
+# ════════════════════════════════════════════════════════════════════════════
+#  FOOTER
+# ════════════════════════════════════════════════════════════════════════════    
+def render_footer():
+    st.markdown("""
+<style>
+.footer {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background-color: #f8fafc;
+    color: #1f2937;
+    text-align: center;
+    padding: 10px;
+    font-size: 14px;
+    border-top: 1px solid #e5e7eb;
+}
+</style>
+
+<div class="footer">
+    © 2026 Fieri Leadership | All Rights Reserved
+</div>
+""", unsafe_allow_html=True)

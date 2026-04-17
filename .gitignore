@@ -1,5 +1,6 @@
 *__pycache__/*
 ./venv/*
 .env
-migrate_to_turso.py
 backup/*
+.streamlit/*
+hidden_utils/*
