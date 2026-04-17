@@ -76,10 +76,10 @@ def init_db():
         );
         """)
         # Migration: add answer_type column to existing databases
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()]
-        if "answer_type" not in cols:
-            conn.execute("ALTER TABLE questions ADD COLUMN answer_type TEXT DEFAULT 'text'")
-        _seed_default_questions(conn)
+        # cols = [r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()]
+        # if "answer_type" not in cols:
+        #     conn.execute("ALTER TABLE questions ADD COLUMN answer_type TEXT DEFAULT 'text'")
+        # _seed_default_questions(conn)
 
 
 def _seed_default_questions(conn):
