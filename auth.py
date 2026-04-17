@@ -1,5 +1,6 @@
 import streamlit as st
 import bcrypt
+from ui import render_logo
 
 def _check_password(username, password):
     try:
@@ -35,8 +36,6 @@ def require_auth():
 
     with st.sidebar:
         st.markdown("---")
-        st.markdown("### 👤 Account")
-        st.write(f"**User:** {st.session_state.get('user','')}")
-
-        if st.button("Logout", use_container_width=True):
+        st.markdown(f"### 👤 {(st.session_state.get('user','')).upper()}")
+        if st.button("⏻", use_container_width=False):
             _logout()

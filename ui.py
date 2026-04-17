@@ -17,8 +17,11 @@ from ai_helper import generate_answers
 # ════════════════════════════════════════════════════════════════════════════
 #  Logo
 # ════════════════════════════════════════════════════════════════════════════
-def render_logo():
-    st.image("./assets/logo/Fieri_Leadership.png", width=200)
+def render_logo(size="default"):
+    if size == "small":
+        st.image("./assets/logo/Fieri_Leadership.png", width=50)
+    else:    
+        st.image("./assets/logo/Fieri_Leadership.png", width=200)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -35,7 +38,6 @@ def render_theme():
 
 def render_sidebar():
     with st.sidebar:
-        st.image("./assets/logo/Fieri_Leadership.png", width=75)
         st.markdown(
             f"""
             <div class="sidebar-brand">
@@ -52,7 +54,7 @@ def render_sidebar():
         st.markdown("---")
 
         # ── Admin button ──
-        if st.button("⚙ Admin / Jobs", use_container_width=True,
+        if st.button("⚙ Admin/Manage", use_container_width=True,
                       type="primary" if st.session_state.current_page == "admin" else "secondary"):
             st.session_state.current_page = "admin"
             st.session_state.current_job = None

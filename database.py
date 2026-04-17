@@ -1,7 +1,9 @@
 import sqlite3
 import os
 from datetime import datetime
-from pathlib import Path
+import streamlit as st
+from contextlib import contextmanager
+
 
 DB_PATH = "qa_portal.db"
 # Load .env file if present (local dev only)
@@ -16,23 +18,46 @@ TURSO_URL   = os.environ.get("TURSO_URL", "").strip()
 TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
 USE_TURSO   = bool(TURSO_URL and TURSO_TOKEN and TURSO_DB_NAME)
 
-from contextlib import contextmanager
+@st.cache_resource
+def _get_turso_conn():
+    import libsql_experimental as libsql
+    return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+
+# @contextmanager
+# def get_conn():
+#     if USE_TURSO:
+#         DB_PATH = Path(TURSO_DB_NAME)
+#         import libsql_experimental as libsql
+#         conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+#         try:
+#             yield conn
+#             conn.commit()
+#         except Exception:
+#             raise
+#         finally:
+#             conn.close()
+#     else:
+#         DB_PATH = "qa_portal.db"
+#         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+#         try:
+#             yield conn
+#             conn.commit()
+#         except Exception:
+#             raise
+#         finally:
+#             conn.close()
 
 @contextmanager
 def get_conn():
     if USE_TURSO:
-        DB_PATH = Path(TURSO_DB_NAME)
-        import libsql_experimental as libsql
-        conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+        conn = _get_turso_conn()
         try:
             yield conn
             conn.commit()
         except Exception:
             raise
-        finally:
-            conn.close()
+        # Note: do NOT close — connection is reused across requests
     else:
-        DB_PATH = "qa_portal.db"
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         try:
             yield conn
@@ -41,6 +66,7 @@ def get_conn():
             raise
         finally:
             conn.close()
+
 
 def init_db():
     with get_conn() as conn:
