@@ -4,3 +4,4 @@
 backup/*
 .streamlit/*
 hidden_utils/*
+tna_database.log

@@ -3,3 +3,4 @@ requests>=2.31.0
 libsql-experimental==0.0.55
 python-dotenv==1.2.2
 bcrypt==5.0.0
+nanoid==2.0.0

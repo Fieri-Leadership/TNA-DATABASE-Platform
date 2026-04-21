@@ -4,6 +4,8 @@ from datetime import datetime
 import streamlit as st
 from contextlib import contextmanager
 
+from logger import get_logger
+logger = get_logger()
 
 DB_PATH = "qa_portal.db"
 # Load .env file if present (local dev only)
@@ -11,6 +13,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
+    logger.error("Error loading variables from the environment.")
     pass  # dotenv not installed, rely on real environment variables
 
 TURSO_DB_NAME = os.environ.get("TURSO_DB_NAME", "").strip()
@@ -21,7 +24,12 @@ USE_TURSO   = bool(TURSO_URL and TURSO_TOKEN and TURSO_DB_NAME)
 @st.cache_resource
 def _get_turso_conn():
     import libsql_experimental as libsql
-    return libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+    try:
+        conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+        return conn
+    except Exception as e:
+        logger.error(f"Error connecting database at Turso: {e}", exc_info=True)
+        raise
 
 # @contextmanager
 # def get_conn():
@@ -46,7 +54,7 @@ def _get_turso_conn():
 #             raise
 #         finally:
 #             conn.close()
-
+logger.info(f"Using database backend: {'Turso' if USE_TURSO else 'SQLite'}")
 @contextmanager
 def get_conn():
     if USE_TURSO:
@@ -54,15 +62,17 @@ def get_conn():
         try:
             yield conn
             conn.commit()
-        except Exception:
-            raise
+        except Exception as e:
+            logger.error(f"Turso DB error: {e}", exc_info=True)
+            st.error("Something went wrong with database connection. Contact your admin. ")
         # Note: do NOT close — connection is reused across requests
     else:
         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         try:
             yield conn
             conn.commit()
-        except Exception:
+        except Exception as e:
+            logger.error(f"Local DB error: {e}", exc_info=True)
             raise
         finally:
             conn.close()
@@ -70,42 +80,46 @@ def get_conn():
 
 def init_db():
     with get_conn() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS jobs (
-            job_code     TEXT PRIMARY KEY,
-            client_name  TEXT NOT NULL,
-            description  TEXT,
-            sector       TEXT,
-            created_at   TEXT,
-            updated_at   TEXT,
-            cohort_size  INT DEFAULT 10
-        );
+        try:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_code     TEXT PRIMARY KEY,
+                client_name  TEXT NOT NULL,
+                description  TEXT,
+                sector       TEXT,
+                created_at   TEXT,
+                updated_at   TEXT,
+                cohort_size  INT DEFAULT 10
+            );
 
-        CREATE TABLE IF NOT EXISTS questions (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            page         TEXT NOT NULL,
-            position     INTEGER NOT NULL,
-            question     TEXT NOT NULL,
-            answer_type  TEXT DEFAULT 'text',
-            is_active    INTEGER DEFAULT 1
-        );
+            CREATE TABLE IF NOT EXISTS questions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                page         TEXT NOT NULL,
+                position     INTEGER NOT NULL,
+                question     TEXT NOT NULL,
+                answer_type  TEXT DEFAULT 'text',
+                is_active    INTEGER DEFAULT 1
+            );
 
-        CREATE TABLE IF NOT EXISTS answers (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_code     TEXT NOT NULL,
-            page         TEXT NOT NULL,
-            question_id  INTEGER NOT NULL,
-            answer       TEXT,
-            mode         TEXT DEFAULT 'Manual',
-            updated_at   TEXT,
-            UNIQUE(job_code, page, question_id)
-        );
-        """)
-        # Migration: add answer_type column to existing databases
-        # cols = [r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()]
-        # if "answer_type" not in cols:
-        #     conn.execute("ALTER TABLE questions ADD COLUMN answer_type TEXT DEFAULT 'text'")
-        # _seed_default_questions(conn)
+            CREATE TABLE IF NOT EXISTS answers (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_code     TEXT NOT NULL,
+                page         TEXT NOT NULL,
+                question_id  INTEGER NOT NULL,
+                answer       TEXT,
+                mode         TEXT DEFAULT 'Manual',
+                updated_at   TEXT,
+                UNIQUE(job_code, page, question_id)
+            );
+            """)
+            # Migration: add answer_type column to existing databases
+            # cols = [r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()]
+            # if "answer_type" not in cols:
+            #     conn.execute("ALTER TABLE questions ADD COLUMN answer_type TEXT DEFAULT 'text'")
+            # _seed_default_questions(conn)
+        except Exception as e:
+            logger.critical(f"DB init failed: {e}", exc_info=True)
+            raise
 
 
 def _seed_default_questions(conn):
@@ -158,12 +172,17 @@ def _seed_default_questions(conn):
 # ─── Job CRUD ────────────────────────────────────────────────────────────────
 
 def create_job(job_code, client_name, description, sector,cohort_size):
+    logger.info(f"Creating job: {job_code.upper()} — {client_name}")
     now = datetime.now().isoformat()
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (job_code.upper(), client_name, description, sector,now, now, cohort_size),
-        )
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (job_code.upper(), client_name, description, sector,now, now, cohort_size),
+            )
+    except Exception as e:
+        logger.error(f"Failed to create job {job_code}: {e}", exc_info=True)
+        raise
 
 
 def get_all_jobs():
@@ -192,10 +211,14 @@ def update_job(job_code, client_name, description, sector,cohort_size):
 
 
 def delete_job(job_code):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM jobs WHERE job_code = ?", (job_code.upper(),))
-        conn.execute("DELETE FROM answers WHERE job_code = ?", (job_code.upper(),))
-
+    logger.warning(f"Deleting job and all answers: {job_code}")
+    try:
+        with get_conn() as conn:
+            conn.execute("DELETE FROM jobs WHERE job_code = ?", (job_code.upper(),))
+            conn.execute("DELETE FROM answers WHERE job_code = ?", (job_code.upper(),))
+    except Exception as e:
+        logger.error(f"Failed to delete job {job_code}: {e}", exc_info=True)
+        raise
 
 # ─── Question CRUD ──────────────────────────────────────────────────────────
 
@@ -247,15 +270,19 @@ def get_answers(job_code, page):
 
 
 def save_answer(job_code, page, question_id, answer, mode="Manual"):
-    now = datetime.now().isoformat()
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO answers (job_code, page, question_id, answer, mode, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(job_code, page, question_id)
-               DO UPDATE SET answer=excluded.answer, mode=excluded.mode, updated_at=excluded.updated_at""",
-            (job_code.upper(), page, question_id, answer, mode, now),
-        )
+    try:
+        now = datetime.now().isoformat()
+        with get_conn() as conn:
+            conn.execute(
+                """INSERT INTO answers (job_code, page, question_id, answer, mode, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_code, page, question_id)
+                DO UPDATE SET answer=excluded.answer, mode=excluded.mode, updated_at=excluded.updated_at""",
+                (job_code.upper(), page, question_id, answer, mode, now),
+            )
+    except Exception as e:
+        logger.error(f"Failed to save answer — job:{job_code} q:{question_id}: {e}", exc_info=True)
+        raise
 
 
 def clear_answers(job_code, page):
