@@ -1,6 +1,9 @@
 import streamlit as st
 import bcrypt
-from ui import render_logo
+
+from logger import get_logger
+
+logger = get_logger()
 
 def _check_password(username, password):
     try:
@@ -18,11 +21,15 @@ def _login():
         if _check_password(u, p):
             st.session_state["auth"] = True
             st.session_state["user"] = u
+            from utils import set_request_id
+            set_request_id()
+            logger.info(f"User <{u}> just logged in.")
             st.rerun()
         else:
             st.error("Invalid credentials")
 
 def _logout():
+    logger.info(f"User <{st.session_state["user"]}> just logged out.")
     st.session_state.clear()
     st.rerun()
 
