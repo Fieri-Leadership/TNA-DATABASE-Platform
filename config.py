@@ -50,16 +50,16 @@ PAGE_CONFIG = {
     "client": {
         "label": "Organisational Profile",
         "icon":  "🏢",
-        "description": "Questions for gathering information to create a rich organisational profile for organisational analysis. ",
+        "description": "Questions for gathering information to create a rich organisational profile for analysis. \n Please provide answers for as many as you can. ",
     },
     "learner": {
         "label": "Learners Population",
         "icon":  "👩‍🎓",
-        "description": "Questions related to the target trainee population/cohort.",
+        "description": "Questions related to the target trainee population/cohort. Please provide answers for as many as you can.",
     },
     "individual_char": {
         "label": "Individual Characteristics",
         "icon":  "👔",
-        "description": "Questions that capture various individual characteristics of the learning population. Usually this information is received from a survey or similar sources but for this dataset it can represent an Avg of the cohort. ",
+        "description": "Questions that capture various individual characteristics of the learning population. Usually this information is received from a survey or similar sources but for this dataset it can represent an Avg of the cohort. Please provide answers for as many as you can.",
     },
 }

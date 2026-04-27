@@ -9,11 +9,17 @@ def _check_password(username, password):
     try:
         stored_hash = st.secrets["auth"]["passwords"][username]
         return bcrypt.checkpw(password.encode(), stored_hash.encode())
-    except Exception:
+    except Exception as e:
+        logger.exception(f"Error occurred while checking password for user {username}: {e}")
         return False
 
 def _login():
-    st.title("Fieri Leadership - TNA Database platform - Login")
+    from ui import render_logo,render_theme
+    render_theme()
+    render_logo()
+    st.title("Fieri Leadership - TNA Database platform")
+    st.markdown("<br><br>", unsafe_allow_html=True)
+
     u = st.text_input("Username")
     p = st.text_input("Password", type="password")
 

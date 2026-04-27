@@ -122,8 +122,10 @@ def set_pagelayout():
 def render_admin_page():
     try:
         st.markdown('<h1 class="page-title">⚙ Admin Panel</h1>', unsafe_allow_html=True)
-
-        tab_create, tab_manage, tab_questions, tab_research = st.tabs(["Create Job", "Manage Jobs", "Manage Questions", "Research Base"])
+        if (st.session_state["user"]).lower() == "admin": #Show only to the admins:
+            tab_create, tab_manage, tab_questions, tab_research = st.tabs(["Create Job", "Manage Jobs", "Manage Questions", "Research Base"])
+        else:
+            tab_create, tab_manage = st.tabs(["Create Job", "Manage Jobs"])
 
         # ── Create Job ──────────────────────────────────────────────────────────
         with tab_create:
@@ -208,78 +210,79 @@ def render_admin_page():
                                 st.rerun()
 
         # ── Manage Questions ────────────────────────────────────────────────────
-        with tab_questions:
-            st.markdown("#### Question Bank")
-            st.caption("Add or remove questions and set the answer type for each. Changes apply to all jobs.")
+        if (st.session_state["user"]).lower() == "admin": #Show only to the admins
+            with tab_questions:
+                st.markdown("#### Question Bank")
+                st.caption("Add or remove questions and set the answer type for each. Changes apply to all jobs.")
 
-            page_sel = st.selectbox("Page", list(PAGE_CONFIG.keys()),
-                                    format_func=lambda k: PAGE_CONFIG[k]["label"])
+                page_sel = st.selectbox("Page", list(PAGE_CONFIG.keys()),
+                                        format_func=lambda k: PAGE_CONFIG[k]["label"])
 
-            questions = get_questions(page_sel)
-            for qid, qtext, pos, subsection, ans_type in questions:
-                col_q, col_sub, col_type, col_del = st.columns([5, 2, 2, 1])
-                with col_q:
-                    new_qtext = st.text_input(
-                        "Question",
-                        value=qtext,
-                        key=f"qtext_{qid}",
-                        label_visibility="collapsed",
-                    )
-                with col_sub:
-                    new_sub = st.text_input(
-                        "Subsection",
-                        value=subsection or "",
-                        key=f"qsub_{qid}",
-                        label_visibility="collapsed",
-                        placeholder="Subsection label…",
-                    )
-                with col_type:
-                    type_options = list(ANSWER_TYPES.keys())
-                    current_idx = type_options.index(ans_type) if ans_type in type_options else 0
+                questions = get_questions(page_sel)
+                for qid, qtext, pos, subsection, ans_type in questions:
+                    col_q, col_sub, col_type, col_del = st.columns([5, 2, 2, 1])
+                    with col_q:
+                        new_qtext = st.text_input(
+                            "Question",
+                            value=qtext,
+                            key=f"qtext_{qid}",
+                            label_visibility="collapsed",
+                        )
+                    with col_sub:
+                        new_sub = st.text_input(
+                            "Subsection",
+                            value=subsection or "",
+                            key=f"qsub_{qid}",
+                            label_visibility="collapsed",
+                            placeholder="Subsection label…",
+                        )
+                    with col_type:
+                        type_options = list(ANSWER_TYPES.keys())
+                        current_idx = type_options.index(ans_type) if ans_type in type_options else 0
+                        new_type = st.selectbox(
+                            "Type",
+                            type_options,
+                            index=current_idx,
+                            key=f"type_{qid}",
+                            format_func=lambda k: ANSWER_TYPES[k],
+                            label_visibility="collapsed",
+                        )
+                        if new_type != ans_type:
+                            update_question_type(qid, new_type)
+                            st.rerun()
+                    with col_del:
+                        col_save_q, col_del_q = st.columns(2)
+                        with col_save_q:
+                            if st.button("💾", key=f"save_q_{qid}", help="Save changes"):
+                                update_question(qid, new_qtext, new_sub)
+                                st.rerun()
+                        with col_del_q:
+                            if st.button("✕", key=f"del_q_{qid}", help="Remove question"):
+                                delete_question(qid)
+                                st.rerun()
+
+                st.markdown("---")
+                col_new_q, col_new_type,col_subsection = st.columns([3, 1,1])
+                with col_new_q:
+                    new_q = st.text_input("Add new question", placeholder="Type question text…")
+                with col_subsection:
+                    new_subsection = st.text_input("Add a new subsection",placeholder="Type subsection text..")
+                with col_new_type:
                     new_type = st.selectbox(
-                        "Type",
-                        type_options,
-                        index=current_idx,
-                        key=f"type_{qid}",
+                        "Answer type",
+                        list(ANSWER_TYPES.keys()),
                         format_func=lambda k: ANSWER_TYPES[k],
-                        label_visibility="collapsed",
+                        key="new_q_type",
                     )
-                    if new_type != ans_type:
-                        update_question_type(qid, new_type)
+                if st.button("＋ Add Question", type="primary"):
+                    if new_q.strip():
+                        add_question(page_sel, new_q.strip(), new_subsection,new_type)
                         st.rerun()
-                with col_del:
-                    col_save_q, col_del_q = st.columns(2)
-                    with col_save_q:
-                        if st.button("💾", key=f"save_q_{qid}", help="Save changes"):
-                            update_question(qid, new_qtext, new_sub)
-                            st.rerun()
-                    with col_del_q:
-                        if st.button("✕", key=f"del_q_{qid}", help="Remove question"):
-                            delete_question(qid)
-                            st.rerun()
-
-            st.markdown("---")
-            col_new_q, col_new_type,col_subsection = st.columns([3, 1,1])
-            with col_new_q:
-                new_q = st.text_input("Add new question", placeholder="Type question text…")
-            with col_subsection:
-                new_subsection = st.text_input("Add a new subsection",placeholder="Type subsection text..")
-            with col_new_type:
-                new_type = st.selectbox(
-                    "Answer type",
-                    list(ANSWER_TYPES.keys()),
-                    format_func=lambda k: ANSWER_TYPES[k],
-                    key="new_q_type",
-                )
-            if st.button("＋ Add Question", type="primary"):
-                if new_q.strip():
-                    add_question(page_sel, new_q.strip(), new_subsection,new_type)
-                    st.rerun()
-                else:
-                    st.warning("Question text cannot be empty.")
-        # ── Research Base ───────────────────────────────────────────────────────
-        with tab_research:
-            render_research_base()
+                    else:
+                        st.warning("Question text cannot be empty.")
+            # ── Research Base ───────────────────────────────────────────────────────
+            with tab_research:
+                render_research_base()
     except Exception as e:
         logger.error(f"Something went wrong while loading this page.{e}")
         st.error("Something went wrong loading this page. The error has been logged.")
