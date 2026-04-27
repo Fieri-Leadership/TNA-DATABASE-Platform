@@ -1,11 +1,11 @@
 # ─── Authentication first ────────────────────────────────────────────────────────────
+from auth import require_auth
+require_auth()
+
+# ─── Rendering UI components ────────────────────────────────────────────────────────────
 from ui import render_logo,render_theme
 render_theme()
 render_logo()
-
-# ─── Authentication first ────────────────────────────────────────────────────────────
-from auth import require_auth
-require_auth()
 
 import streamlit as st
 from database import init_db
