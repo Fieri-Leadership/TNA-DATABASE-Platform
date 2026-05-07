@@ -62,4 +62,9 @@ PAGE_CONFIG = {
         "icon":  "👔",
         "description": "Questions that capture various individual characteristics of the learning population. Usually this information is received from a survey or similar sources but for this dataset it can represent an Avg of the cohort. Please provide answers for as many as you can.",
     },
+    "TNA_otp": {
+        "label": "AI Assisted TNA with OTP Model",
+        "icon":  "✨",
+        "description": "Training Needs Analysis with OTP model.",
+    }
 }

@@ -391,127 +391,187 @@ def render_job_pages():
 
 
 def render_qa_page(job_code, page_key, job):
+    from automation.otp_workflow import execute_workflow
+    from utils import get_latest_matching_file
+    from dotenv import load_dotenv
+    import os
+    load_dotenv()
     try:
-        config = PAGE_CONFIG[page_key]
         mode = st.session_state.mode
+        # Rendering the existing or new TNA reports.
+        if page_key == "TNA_otp":
+            st.markdown("#### Company Description")
+            _, _, description, _, _, _, _ = job
+            if description:
+                st.text(description)
 
-        questions = get_questions(page_key)
-        answers = get_answers(job_code, page_key)
+            st.markdown("---")
+            st.session_state[f"otp_result_{job_code}"] = None
+            run_analysis_button_name = "▶️ Run OTP Analysis"
+            # Check for any previously generated file exist or not.
+            existing_file_dir = os.getenv("DATA_DIR") + f"/{job_code}/"
+            existing_file_path = get_latest_matching_file(
+            directory=existing_file_dir,
+            starts_with=f"{job_code}_Intermediate_analysis_report_",
+            extension=".md"
+            )
+            if existing_file_path:
+                result = open(existing_file_path, "r").read()
+                st.session_state[f"otp_result_{job_code}"] = result
+                logger.info(f"Previously generated report found in existing file [{existing_file_path}] from the last execution for job {job_code}.")
+                run_analysis_button_name = "🔄 Re-run OTP Analysis"
 
-        if not questions:
-            st.info("No questions configured for this page. Add them in Admin → Manage Questions.")
-            return
 
-        # ── Auto-generate strip ──────────────────────────────────────────────
-        if mode == "Automatic":
-            col_info, col_btn = st.columns([3, 1])
-            with col_info:
+            # New report updated via running the workflow and the status is overridden.
+            if st.button(run_analysis_button_name, type="primary", key=f"run_otp_{job_code}"):
+                
+                with st.spinner("Running analysis…"):
+                    try:
+                        result = execute_workflow(job_code)     
+                        if result:
+                            st.session_state[f"otp_result_{job_code}"] = result
+                            logger.info(f"OTP analysis completed — job:{job_code}")
+                    except Exception as e:
+                        logger.error(f"OTP analysis failed — job:{job_code}: {e}", exc_info=True)
+                        st.session_state[f"otp_result_{job_code}"] = f"__error__{e}"
+                st.rerun()
+
+            # ── Result display in the markdown block either from the new or the previously generated report. 
+            result = st.session_state.get(f"otp_result_{job_code}")
+            if result:
+                st.markdown("---")
+                if str(result).startswith("__error__"):
+                    st.error("Analysis failed. Contact the admin.")
+                else:
+                    logger.info(f"OTP result for job {job_code}: {result}")
+                    st.markdown(result)
+                    st.download_button(
+                        label="⬇ Download Report",
+                        data=result or "",
+                        file_name=f"otp_report_{job_code}.md",
+                        mime="text/markdown",
+                        disabled=result is None,
+                        key=f"download_otp_{job_code}"
+                    )
+        else:
+            questions = get_questions(page_key)
+            answers = get_answers(job_code, page_key)
+
+            if not questions:
+                st.info("No questions configured for this page. Add them in Admin → Manage Questions.")
+                return
+
+            # ── Auto-generate strip ──────────────────────────────────────────────
+            if mode == "Automatic":
+                col_info, col_btn = st.columns([3, 1])
+                with col_info:
+                    st.markdown(
+                        f'<div class="mode-badge auto">✦ Automatic Mode — AI will draft answers from job context</div>',
+                        unsafe_allow_html=True,
+                    )
+                with col_btn:
+                    if st.button(f"⚡ Generate All", key=f"gen_{job_code}_{page_key}", type="primary", use_container_width=True):
+                        with st.spinner("Generating answers…"):
+                            job_details = {
+                                "job_code": job[0],
+                                "client_name": job[1],
+                                "description": job[2],
+                                "sector": job[3],
+                            }
+                            q_texts = [q[1] for q in questions]
+                            ai_answers = generate_answers(job_details, q_texts, page_key)
+                            for (qid, _, _), ans in zip(questions, ai_answers):
+                                save_answer(job_code, page_key, qid, ans, mode="Automatic")
+                        st.rerun()
+            else:
                 st.markdown(
-                    f'<div class="mode-badge auto">✦ Automatic Mode — AI will draft answers from job context</div>',
+                    '<div class="mode-badge manual">✎ Manual Mode — Fill in answers below</div>',
                     unsafe_allow_html=True,
                 )
-            with col_btn:
-                if st.button(f"⚡ Generate All", key=f"gen_{job_code}_{page_key}", type="primary", use_container_width=True):
-                    with st.spinner("Generating answers…"):
-                        job_details = {
-                            "job_code": job[0],
-                            "client_name": job[1],
-                            "description": job[2],
-                            "sector": job[3],
-                        }
-                        q_texts = [q[1] for q in questions]
-                        ai_answers = generate_answers(job_details, q_texts, page_key)
-                        for (qid, _, _), ans in zip(questions, ai_answers):
-                            save_answer(job_code, page_key, qid, ans, mode="Automatic")
-                    st.rerun()
-        else:
-            st.markdown(
-                '<div class="mode-badge manual">✎ Manual Mode — Fill in answers below</div>',
-                unsafe_allow_html=True,
-            )
 
-        st.markdown("---")
-        st.info(PAGE_CONFIG[page_key]["description"], icon="ℹ️")
+            st.markdown("---")
+            st.info(PAGE_CONFIG[page_key]["description"], icon="ℹ️")
 
-        # ── Q&A fields ───────────────────────────────────────────────────────
-        draft = {}
-        for qid, qtext, pos, subsection, ans_type in questions:
-            existing = answers.get(qid, {}).get("answer", "")
-            ans_mode = answers.get(qid, {}).get("mode", "")
+            # ── Q&A fields ───────────────────────────────────────────────────────
+            draft = {}
+            for qid, qtext, pos, subsection, ans_type in questions:
+                existing = answers.get(qid, {}).get("answer", "")
+                ans_mode = answers.get(qid, {}).get("mode", "")
 
-            type_badge = {
-                "likert":   '<span class="type-badge likert">Likert</span>',
-                "dropdown": '<span class="type-badge dropdown">Dropdown</span>',
-            }.get(ans_type, '<span class="type-badge text">Text</span>')
+                type_badge = {
+                    "likert":   '<span class="type-badge likert">Likert</span>',
+                    "dropdown": '<span class="type-badge dropdown">Dropdown</span>',
+                }.get(ans_type, '<span class="type-badge text">Text</span>')
 
-            subsection_badge = f' <span class="type-badge subsection">{subsection}</span>'
-            ai_badge = ' <span class="ai-tag">AI</span>' if ans_mode == "Automatic" else ""
+                subsection_badge = f' <span class="type-badge subsection">{subsection}</span>'
+                ai_badge = ' <span class="ai-tag">AI</span>' if ans_mode == "Automatic" else ""
 
-            import re as _re
-            _display_text = _re.sub(r'\s*\[[^\]]*\]', '', qtext).strip()
-            st.markdown(
-                f'<div class="question-label">{pos + 1}. {_display_text} {subsection_badge} {type_badge}{ai_badge}</div>',
-                unsafe_allow_html=True,
-            )
-
-            if ans_type == "likert":
-                draft[qid] = _render_likert(job_code,qid, page_key, existing)
-            elif ans_type == "dropdown":
-                draft[qid] = _render_dropdown(job_code, qid, page_key, qtext, existing)
-            else:
-                draft[qid] = st.text_area(
-                    f"Answer {pos + 1}",
-                    value=existing,
-                    height=100,
-                    key=f"ans_{job_code}_{page_key}_{qid}",
-                    label_visibility="collapsed",
-                    placeholder="Enter answer here…",
+                import re as _re
+                _display_text = _re.sub(r'\s*\[[^\]]*\]', '', qtext).strip()
+                st.markdown(
+                    f'<div class="question-label">{pos + 1}. {_display_text} {subsection_badge} {type_badge}{ai_badge}</div>',
+                    unsafe_allow_html=True,
                 )
 
-        st.markdown("---")
+                if ans_type == "likert":
+                    draft[qid] = _render_likert(job_code,qid, page_key, existing)
+                elif ans_type == "dropdown":
+                    draft[qid] = _render_dropdown(job_code, qid, page_key, qtext, existing)
+                else:
+                    draft[qid] = st.text_area(
+                        f"Answer {pos + 1}",
+                        value=existing,
+                        height=100,
+                        key=f"ans_{job_code}_{page_key}_{qid}",
+                        label_visibility="collapsed",
+                        placeholder="Enter answer here…",
+                    )
 
-        # ── Action row ───────────────────────────────────────────────────────
-        col_save, col_clear, col_export = st.columns([2, 1, 1])
-        with col_save:
-            if st.button("💾 Save All", type="primary", use_container_width=True, key=f"save_{job_code}_{page_key}"):
-                for qid, answer_text in draft.items():
-                    save_answer(job_code, page_key, qid, answer_text, mode=mode)
-                st.success("✅ Saved successfully.")
+            st.markdown("---")
 
-        with col_clear:
-            if st.button("🗑 Clear All", type="secondary", use_container_width=True, key=f"clear_{job_code}_{page_key}"):
-                st.session_state[f"confirm_clear_{page_key}"] = True
+            # ── Action row ───────────────────────────────────────────────────────
+            col_save, col_clear, col_export = st.columns([2, 1, 1])
+            with col_save:
+                if st.button("💾 Save All", type="primary", use_container_width=True, key=f"save_{job_code}_{page_key}"):
+                    for qid, answer_text in draft.items():
+                        save_answer(job_code, page_key, qid, answer_text, mode=mode)
+                    st.success("✅ Saved successfully.")
 
-        with col_export:
-            # Simple text export
-            export_lines = [f"{PAGE_CONFIG[page_key]['label']} — {job_code}\n{'='*50}\n"]
-            for qid, qtext, pos,subsection, ans_type in questions:
-                ans = draft.get(qid, "")
-                export_lines.append(f"Q{pos+1}: {qtext}\nA: {ans}\n")
-            export_text = "\n".join(export_lines)
-            st.download_button(
-                "⬇ Export",
-                data=export_text,
-                file_name=f"{job_code}_{page_key}.txt",
-                mime="text/plain",
-                use_container_width=True,
-                key=f"export_{job_code}_{page_key}",
-            )
+            with col_clear:
+                if st.button("🗑 Clear All", type="secondary", use_container_width=True, key=f"clear_{job_code}_{page_key}"):
+                    st.session_state[f"confirm_clear_{page_key}"] = True
 
-        if st.session_state.get(f"confirm_clear_{page_key}"):
-            st.warning("This will remove all saved answers for this page. Continue?")
-            col_yes, col_no = st.columns(2)
-            with col_yes:
-                if st.button("Yes, clear", type="primary", key=f"yes_clear_{job_code}_{page_key}"):
-                    clear_answers(job_code, page_key)
-                    st.session_state.pop(f"confirm_clear_{page_key}", None)
-                    st.rerun()
-            with col_no:
-                if st.button("No, cancel", key=f"no_clear_{job_code}_{page_key}"):
-                    st.session_state.pop(f"confirm_clear_{page_key}", None)
-                    st.rerun()
+            with col_export:
+                # Simple text export
+                export_lines = [f"{PAGE_CONFIG[page_key]['label']} — {job_code}\n{'='*50}\n"]
+                for qid, qtext, pos,subsection, ans_type in questions:
+                    ans = draft.get(qid, "")
+                    export_lines.append(f"Q{pos+1}: {qtext}\nA: {ans}\n")
+                export_text = "\n".join(export_lines)
+                st.download_button(
+                    "⬇ Export",
+                    data=export_text,
+                    type="primary",
+                    file_name=f"{job_code}_{page_key}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    key=f"export_{job_code}_{page_key}",
+                )
+
+            if st.session_state.get(f"confirm_clear_{page_key}"):
+                st.warning("This will remove all saved answers for this page. Continue?")
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("Yes, clear", type="primary", key=f"yes_clear_{job_code}_{page_key}"):
+                        clear_answers(job_code, page_key)
+                        st.session_state.pop(f"confirm_clear_{page_key}", None)
+                        st.rerun()
+                with col_no:
+                    if st.button("No, cancel", key=f"no_clear_{job_code}_{page_key}"):
+                        st.session_state.pop(f"confirm_clear_{page_key}", None)
+                        st.rerun()
     except Exception as e:
-        logger.error(f"Something went wrong while rendering the QA page. Please contact admin. {repr(e)}")
+        logger.error(f"Something went wrong while rendering the QA page. Please contact admin. {e}")
         st.error("Something went wrong loading this page. The error has been logged.")
 
 
