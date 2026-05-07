@@ -1,7 +1,8 @@
-*__pycache__/*
+**/__pycache__/
 ./venv/*
 .env
 backup/*
 .streamlit/*
 hidden_utils/*
 tna_database.log
+data/*
