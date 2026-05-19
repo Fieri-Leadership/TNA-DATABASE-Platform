@@ -1,7 +1,10 @@
 import sqlite3
 import os
+import sys
 from datetime import datetime
+import threading
 import streamlit as st
+import libsql
 from contextlib import contextmanager
 
 from logger import get_logger
@@ -21,62 +24,122 @@ TURSO_URL   = os.environ.get("TURSO_URL", "").strip()
 TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
 USE_TURSO   = bool(TURSO_URL and TURSO_TOKEN and TURSO_DB_NAME)
 
-@st.cache_resource
-def _get_turso_conn():
-    import libsql_experimental as libsql
-    try:
-        conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
-        return conn
-    except Exception as e:
-        logger.error(f"Error connecting database at Turso: {e}", exc_info=True)
-        raise
+# @st.cache_resource
+# def _get_turso_conn():
+#     import libsql
+#     try:
+#         conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+#         return conn
+#     except Exception as e:
+#         logger.error(f"Error connecting database at Turso: {e}", exc_info=True)
+#         raise
 
+# logger.info(f"Using database backend: {'Turso' if USE_TURSO else 'SQLite'}")
 # @contextmanager
 # def get_conn():
 #     if USE_TURSO:
-#         DB_PATH = Path(TURSO_DB_NAME)
-#         import libsql_experimental as libsql
-#         conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
+#         conn = _get_turso_conn()
 #         try:
 #             yield conn
 #             conn.commit()
-#         except Exception:
-#             raise
-#         finally:
-#             conn.close()
+#         except Exception as e:
+#             logger.error(f"Turso DB error: {e}", exc_info=True)
+#             st.error("Something went wrong with database connection. Contact your admin. ")
+#         # Note: do NOT close — connection is reused across requests
 #     else:
-#         DB_PATH = "qa_portal.db"
 #         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 #         try:
 #             yield conn
 #             conn.commit()
-#         except Exception:
+#         except Exception as e:
+#             logger.error(f"Local DB error: {e}", exc_info=True)
 #             raise
 #         finally:
 #             conn.close()
-logger.info(f"Using database backend: {'Turso' if USE_TURSO else 'SQLite'}")
+_lock = threading.Lock()
+
+@st.cache_resource
+def _get_turso_conn():
+    logger.info("Creating Turso connection")
+
+    return libsql.connect(
+        TURSO_URL,
+        auth_token=TURSO_TOKEN
+    )
+
+
+def _reconnect():
+    logger.warning("Reconnecting Turso database...")
+
+    try:
+        _get_turso_conn().close()
+    except Exception:
+        pass
+
+    _get_turso_conn.clear()
+
+    return _get_turso_conn()
+
+
+def _ensure_connection(conn):
+    try:
+        conn.execute("SELECT 1")
+        return conn
+
+    except Exception as e:
+        logger.warning(f"Stale Turso connection detected: {e}")
+
+        return _reconnect()
+
+
 @contextmanager
 def get_conn():
+
     if USE_TURSO:
-        conn = _get_turso_conn()
+
+        with _lock:
+
+            conn = _get_turso_conn()
+            conn = _ensure_connection(conn)
+
         try:
             yield conn
             conn.commit()
+
         except Exception as e:
-            logger.error(f"Turso DB error: {e}", exc_info=True)
-            st.error("Something went wrong with database connection. Contact your admin. ")
-        # Note: do NOT close — connection is reused across requests
-    else:
-        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        try:
-            yield conn
-            conn.commit()
-        except Exception as e:
-            logger.error(f"Local DB error: {e}", exc_info=True)
+
+            logger.error(
+                f"Turso DB error: {e}",
+                exc_info=True
+            )
+
+            # reconnect for next request
+            _reconnect()
+
             raise
+
+    else:
+
+        conn = sqlite3.connect(
+            DB_PATH,
+            check_same_thread=False
+        )
+
+        try:
+            yield conn
+            conn.commit()
+
+        except Exception as e:
+
+            logger.error(
+                f"Local DB error: {e}",
+                exc_info=True
+            )
+
+            raise
+
         finally:
             conn.close()
-
 
 def init_db():
     with get_conn() as conn:
@@ -168,8 +231,46 @@ def _seed_default_questions(conn):
                 (page, i, q),
             )
 
+# ─── Common DB fetch Functions ────────────────────────────────────────────────────────────────
 
-# ─── Job CRUD ────────────────────────────────────────────────────────────────
+def fetchall(sql, params=()):
+    with get_conn() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def fetchone(sql, params=()):
+    with get_conn() as conn:
+        return conn.execute(sql, params).fetchone()
+
+def verify_schema() -> None:
+    REQUIRED_TABLES = {"jobs", "questions", "answers"}
+    """
+    Check that all required tables exist in the connected database.
+    Prints a clear diagnostic and exits with code 1 if any are missing.
+    """
+    try:
+        rows = fetchall("SELECT name FROM sqlite_master WHERE type='table'")
+    except Exception as e:
+        logger.error(f"\n[ERROR] Could not query database schema: {e}")
+        logger.error("  → Check that TURSO_URL and TURSO_AUTH_TOKEN are correct and point to the right database.")
+        sys.exit(1)
+ 
+    found_tables = {row[0] for row in rows}
+    missing = REQUIRED_TABLES - found_tables
+ 
+    if missing:
+        logger.error("\n[ERROR] Connected to the database but required tables are missing.")
+        logger.error(f"  Expected : {', '.join(sorted(REQUIRED_TABLES))}")
+        logger.error(f"  Found    : {', '.join(sorted(found_tables)) or '(no tables)'}")
+        logger.error(f"  Missing  : {', '.join(sorted(missing))}")
+        logger.error("\n  → You are likely connected to the wrong database.")
+        logger.error("     Run:  turso db list")
+        logger.error("     Then: turso db show <correct-db-name>  to get the right URL.")
+        sys.exit(1)
+ 
+    logger.info(f"  Schema OK — tables verified: {', '.join(sorted(REQUIRED_TABLES))}")
+
+# ─── Job CRUD and helper functions ────────────────────────────────────────────────────────────────
 
 def create_job(job_code, client_name, description, sector,cohort_size):
     logger.info(f"Creating job: {job_code.upper()} — {client_name}")
@@ -219,6 +320,41 @@ def delete_job(job_code):
     except Exception as e:
         logger.error(f"Failed to delete job {job_code}: {e}", exc_info=True)
         raise
+
+
+def verify_job_exists(job_code: str) -> None:
+    """
+    Check that the given job_code exists in the jobs table.
+    Prints a clear diagnostic and exits with code 1 if not found.
+    """
+    row = fetchone("SELECT job_code, client_name FROM jobs WHERE job_code = ?", (job_code,))
+    if not row:
+        # Show available job codes to help the user pick the right one
+        available = fetchall("SELECT job_code, client_name FROM jobs ORDER BY job_code")
+        logger.error(f"\n[ERROR] Job code '{job_code}' not found in the jobs table.")
+        if available:
+            logger.error(f"  Available job codes:")
+            for jc, name in available:
+                logger.error(f"    - {jc}  ({name})")
+        else:
+            logger.error("  The jobs table is empty — no jobs have been created yet.")
+        sys.exit(1)
+    logger.debug(f"  Job OK — '{job_code}' found: {row[1]}")
+
+def get_job_metadata(job_code:str)->list[str]:
+    job_row = fetchone(
+            "SELECT job_code, client_name, description, sector, cohort_size FROM jobs WHERE job_code = ?",
+            (job_code,))
+    job_lines=[]
+    if job_row:
+        job_code_val, client_name, description, sector, cohort_size = job_row
+        job_lines.append(f"- Job Code: {job_code_val}")
+        job_lines.append(f"- Client: {client_name}")
+        job_lines.append(f"- Sector: {sector or 'N/A'}")
+        job_lines.append(f"- Cohort Size: {cohort_size or 'N/A'}")
+        if description:
+            job_lines.append(f"- Description: {description}")
+    return job_lines
 
 # ─── Question CRUD ──────────────────────────────────────────────────────────
 
@@ -362,3 +498,33 @@ def update_research_item(item_id, title, link, summary, content):
 def delete_research_item(item_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM research_items WHERE id=?", (item_id,))
+
+# ─── TNA Report ───────────────────────────────────────────────────────────
+
+def save_tna_report(job_code: str, requested_by: str, report_content: str):
+    """Save a generated TNA report to the database."""
+    now = datetime.now().isoformat()
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO tna_reports (requested_by, request_timestamp, report_content, job_code)
+               VALUES (?, ?, ?, ?)""",
+            (requested_by, now, report_content, job_code.upper())
+        )
+    logger.info(f"TNA report saved — job:{job_code} user:{requested_by}")
+
+
+def get_latest_tna_report(job_code: str, requested_by: str) -> str | None:
+    """Fetch the most recent report for a given job and user. Returns None if not found."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT report_content FROM tna_reports
+               WHERE job_code = ? AND requested_by = ?
+               ORDER BY request_timestamp DESC
+               LIMIT 1""",
+            (job_code.upper(), requested_by)
+        ).fetchone()
+    if row:
+        logger.debug(f"TNA report fetched — job:{job_code} user:{requested_by}")
+        return row[0]
+    logger.debug(f"No TNA report found — job:{job_code} user:{requested_by}")
+    return None

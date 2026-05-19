@@ -9,135 +9,36 @@ Produces:
 These are plain markdown files intended to be pasted or loaded into an LLM
 context window. They are structured but not decorated — no styling, no fluff.
 
-Dependencies:
-    pip install libsql-experimental
-
 """
 
 import os
-import sys
 import statistics
 from datetime import datetime
-from dotenv import load_dotenv
-from logger import get_logger
 
+from logger import get_logger
+from database import fetchall,verify_schema,verify_job_exists,get_job_metadata
 
 logger = get_logger()
-
-# ── Turso / libsql connection ─────────────────────────────────────────────────
-try:
-    import libsql_experimental as libsql
-    DRIVER = "libsql_experimental"
-except ImportError as ie:
-    logger.error("Something went wrong while importing libsql_experimental.")
-    logger.error(f"Error: {ie}")
-    sys.exit(1)
-
-def get_connection():
-    load_dotenv()
-    url   = os.environ.get("TURSO_URL", "")
-    token = os.environ.get("TURSO_AUTH_TOKEN", "")
-    try:
-        if DRIVER == "libsql_experimental":
-            return libsql.connect(url, auth_token=token)
-        else:
-            raise ConnectionError("Unsupported database driver")
-    except Exception as e:
-        logger.error(f"\n[ERROR] Failed to connect to database: {e}")
-        sys.exit(1)
-
-
-def fetchall(conn, sql, params=()):
-    return conn.execute(sql, params).fetchall()
-
-
-def fetchone(conn, sql, params=()):
-    return conn.execute(sql, params).fetchone()
-
-REQUIRED_TABLES = {"jobs", "questions", "answers"}
- 
-def verify_schema(conn) -> None:
-    """
-    Check that all required tables exist in the connected database.
-    Prints a clear diagnostic and exits with code 1 if any are missing.
-    """
-    try:
-        rows = fetchall(conn, "SELECT name FROM sqlite_master WHERE type='table'")
-    except Exception as e:
-        logger.error(f"\n[ERROR] Could not query database schema: {e}")
-        logger.error("  → Check that TURSO_URL and TURSO_AUTH_TOKEN are correct and point to the right database.")
-        sys.exit(1)
- 
-    found_tables = {row[0] for row in rows}
-    missing = REQUIRED_TABLES - found_tables
- 
-    if missing:
-        logger.error("\n[ERROR] Connected to the database but required tables are missing.")
-        logger.error(f"  Expected : {', '.join(sorted(REQUIRED_TABLES))}")
-        logger.error(f"  Found    : {', '.join(sorted(found_tables)) or '(no tables)'}")
-        logger.error(f"  Missing  : {', '.join(sorted(missing))}")
-        logger.error("\n  → You are likely connected to the wrong database.")
-        logger.error("     Run:  turso db list")
-        logger.error("     Then: turso db show <correct-db-name>  to get the right URL.")
-        sys.exit(1)
- 
-    logger.info(f"  Schema OK — tables verified: {', '.join(sorted(REQUIRED_TABLES))}")
-
-
-def verify_job_exists(conn, job_code: str) -> None:
-    """
-    Check that the given job_code exists in the jobs table.
-    Prints a clear diagnostic and exits with code 1 if not found.
-    """
-    row = fetchone(conn, "SELECT job_code, client_name FROM jobs WHERE job_code = ?", (job_code,))
-    if not row:
-        # Show available job codes to help the user pick the right one
-        available = fetchall(conn, "SELECT job_code, client_name FROM jobs ORDER BY job_code")
-        logger.error(f"\n[ERROR] Job code '{job_code}' not found in the jobs table.")
-        if available:
-            logger.error(f"  Available job codes:")
-            for jc, name in available:
-                logger.error(f"    - {jc}  ({name})")
-        else:
-            logger.error("  The jobs table is empty — no jobs have been created yet.")
-        sys.exit(1)
-    logger.debug(f"  Job OK — '{job_code}' found: {row[1]}")
-
-def get_job_metadata(conn, job_code:str)->list[str]:
-    job_row = fetchone(conn,
-            "SELECT job_code, client_name, description, sector, cohort_size FROM jobs WHERE job_code = ?",
-            (job_code,))
-    job_lines=[]
-    if job_row:
-        job_code_val, client_name, description, sector, cohort_size = job_row
-        job_lines.append(f"- Job Code: {job_code_val}")
-        job_lines.append(f"- Client: {client_name}")
-        job_lines.append(f"- Sector: {sector or 'N/A'}")
-        job_lines.append(f"- Cohort Size: {cohort_size or 'N/A'}")
-        if description:
-            job_lines.append(f"- Description: {description}")
-    return job_lines
-        
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1 & 2 — Q&A context documents (client / learner)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_qa_context(conn, page: str, job_code: str) -> str:
+def build_qa_context(page: str, job_code: str) -> str:
     lines = []
     lines.append(f"# {page.upper()} QUESTIONNAIRE — Q&A CONTEXT DOCUMENT")
     lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"Page: {page}")
     
     # ── Job metadata ──────────────────────────────────────────────────────
-    lines = lines+get_job_metadata(conn=conn, job_code=job_code)
+    lines = lines+get_job_metadata(job_code=job_code)
     lines.append("")
     lines.append("---")
     lines.append("")
 
     # ── Fetch questions + answers ─────────────────────────────────────────
     if job_code:
-        rows = fetchall(conn, """
+        rows = fetchall("""
             SELECT q.position, q.question, q.answer_type, q.subsection,
                    a.answer, a.mode, a.updated_at
             FROM   questions q
@@ -209,13 +110,13 @@ def rating_label(avg: float) -> str:
     return "Needs Attention"
 
 
-def build_likert_context(conn, job_code: str) -> str:
+def build_likert_context(job_code: str) -> str:
     lines = []
 
     lines.append("# LIKERT SCALE SCORES — CONTEXT DOCUMENT")
     lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
-    lines = lines + get_job_metadata(conn=conn, job_code=job_code)
+    lines = lines + get_job_metadata(job_code=job_code)
     lines.append("")
     lines.append("Scale: 1 = Strongly Disagree, 2 = Disagree, 3 = Neutral, 4 = Agree, 5 = Strongly Agree")
     lines.append("")
@@ -223,7 +124,7 @@ def build_likert_context(conn, job_code: str) -> str:
     lines.append("")
  
     # ── Fetch all Likert answers ──────────────────────────────────────────
-    rows = fetchall(conn, """
+    rows = fetchall("""
         SELECT q.id, q.page, q.position, q.question, q.subsection,
                a.answer, a.job_code
         FROM   questions q
@@ -363,17 +264,16 @@ def build_likert_context(conn, job_code: str) -> str:
 def generate_documents_from_db(job_code:str)->str:
 
     # Getting Turso Connection
-    logger.debug(f"Connecting ({DRIVER})…")
-    conn = get_connection()
+    logger.debug(f"Connecting to database for fetching job documents…")
     logger.debug("Connected.\n")
 
     # Verifying Schema
     logger.debug("Verifying schema…")
-    verify_schema(conn)
+    verify_schema()
     
     # Verifying the supplied job
     logger.debug("Verifying job exists…")
-    verify_job_exists(conn, job_code)
+    verify_job_exists(job_code)
     
     # After verification only make data directory
     out_dir  = os.getenv("DATA_DIR","/data")+f"/{job_code}"
@@ -383,14 +283,14 @@ def generate_documents_from_db(job_code:str)->str:
 
     for page in ("client", "learner"):
         logger.debug(f"Building {page} Q&A context…")
-        content = build_qa_context(conn, page, job_code)
+        content = build_qa_context(page, job_code)
         path = os.path.join(out_dir, f"{page}_context{suffix}.md")
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
         logger.info(f"  ✓  {path}  ({len(content):,} chars)")
 
     logger.debug("Building Likert insights context…")
-    content = build_likert_context(conn, job_code)
+    content = build_likert_context(job_code)
     path = os.path.join(out_dir, f"likert_context{suffix}.md")
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
