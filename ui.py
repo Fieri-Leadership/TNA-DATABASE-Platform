@@ -9,6 +9,7 @@ from database import (
     update_question, get_answers, save_answer, clear_answers,
     get_research_topics, add_research_topic, delete_research_topic,
     get_research_items, add_research_item, update_research_item, delete_research_item,
+    save_tna_report, get_latest_tna_report
 )
 from config import BRANDING, SECTOR_OPTIONS, PAGE_CONFIG, ANSWER_TYPES, LIKERT_SCALE
 
@@ -408,19 +409,22 @@ def render_qa_page(job_code, page_key, job):
             st.markdown("---")
             st.session_state[f"otp_result_{job_code}"] = None
             run_analysis_button_name = "▶️ Run OTP Analysis"
-            # Check for any previously generated file exist or not.
-            existing_file_dir = os.getenv("DATA_DIR") + f"/{job_code}/"
-            existing_file_path = get_latest_matching_file(
-            directory=existing_file_dir,
-            starts_with=f"{job_code}_Intermediate_analysis_report_",
-            extension=".md"
-            )
-            if existing_file_path:
-                result = open(existing_file_path, "r").read()
-                st.session_state[f"otp_result_{job_code}"] = result
-                logger.info(f"Previously generated report found in existing file [{existing_file_path}] from the last execution for job {job_code}.")
+            #Check if the database contains the latest generated report
+            result =  get_latest_tna_report(job_code=job_code, requested_by=st.session_state.get("user"))
+            if result:
+            # if not result:
+                # Check for any previously generated file exist or not if database does not contain the latest report
+                # existing_file_dir = os.getenv("DATA_DIR") + f"/{job_code}/"
+                # existing_file_path = get_latest_matching_file(
+                # directory=existing_file_dir,
+                # starts_with=f"{job_code}_Intermediate_analysis_report_",
+                # extension=".md"
+                # )
+                # if existing_file_path:
+                #     result = open(existing_file_path, "r").read()
+                #     logger.info(f"Previously generated report found in existing file [{existing_file_path}] from the last execution for job {job_code}.")
                 run_analysis_button_name = "🔄 Re-run OTP Analysis"
-
+            st.session_state[f"otp_result_{job_code}"] = result
 
             # New report updated via running the workflow and the status is overridden.
             if st.button(run_analysis_button_name, type="primary", key=f"run_otp_{job_code}"):
@@ -430,6 +434,7 @@ def render_qa_page(job_code, page_key, job):
                         result = execute_workflow(job_code)     
                         if result:
                             st.session_state[f"otp_result_{job_code}"] = result
+                            save_tna_report(job_code, st.session_state.get("user"), result)
                             logger.info(f"OTP analysis completed — job:{job_code}")
                     except Exception as e:
                         logger.error(f"OTP analysis failed — job:{job_code}: {e}", exc_info=True)
@@ -443,7 +448,7 @@ def render_qa_page(job_code, page_key, job):
                 if str(result).startswith("__error__"):
                     st.error("Analysis failed. Contact the admin.")
                 else:
-                    logger.info(f"OTP result for job {job_code}: {result}")
+                    # logger.info(f"OTP result for job {job_code}: {result}")
                     st.markdown(result)
                     st.download_button(
                         label="⬇ Download Report",
@@ -619,19 +624,19 @@ def render_research_base():
         with col_del_topic:
             if st.button("🗑 Delete Topic", key=f"del_topic_{topic_id}", type="secondary"):
                 st.session_state["confirm_del_topic"] = topic_id
-
-        if st.session_state.get("confirm_del_topic") == topic_id:
-            st.warning(f"Delete topic **{selected_topic}** and ALL its items?")
-            col_yes, col_no = st.columns(2)
-            with col_yes:
-                if st.button("Yes, delete", type="primary", key="yes_del_topic"):
-                    delete_research_topic(topic_id)
-                    st.session_state.pop("confirm_del_topic", None)
-                    st.rerun()
-            with col_no:
-                if st.button("Cancel", key="no_del_topic"):
-                    st.session_state.pop("confirm_del_topic", None)
-                    st.rerun()
+            if st.session_state.get("confirm_del_topic") == topic_id:
+                st.warning(f"Delete topic **{selected_topic}** and ALL its items?")
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("Yes, delete", type="primary", key="yes_del_topic"):
+                        delete_research_topic(topic_id)
+                        logger.info(f"Research topic deleted: {selected_topic}.")
+                        st.session_state.pop("confirm_del_topic", None)
+                        st.rerun()
+                with col_no:
+                    if st.button("Cancel", key="no_del_topic"):
+                        st.session_state.pop("confirm_del_topic", None)
+                        st.rerun()
 
         st.markdown("---")
 
