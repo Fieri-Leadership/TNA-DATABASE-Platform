@@ -400,7 +400,7 @@ def render_qa_page(job_code, page_key, job):
     try:
         mode = st.session_state.mode
         # Rendering the existing or new TNA reports.
-        if page_key == "TNA_otp":
+        if page_key == "TNA_otp" and st.session_state.get("user", "").lower() == "admin":
             st.markdown("#### Company Description")
             _, _, description, _, _, _, _ = job
             if description:
