@@ -39,17 +39,17 @@ def build_qa_context(page: str, job_code: str) -> str:
     # ── Fetch questions + answers ─────────────────────────────────────────
     if job_code:
         rows = fetchall("""
-            SELECT q.position, q.question, q.answer_type, q.subsection,
-                   a.answer, a.mode, a.updated_at
-            FROM   questions q
-            LEFT JOIN answers a
-                   ON a.question_id = q.id
-                  AND a.page        = q.page
-                  AND a.job_code    = ?
-            WHERE  q.page      = ?
-              AND  q.is_active  = 1
-              AND  q.answer_type != 'likert'
-            ORDER  BY q.subsection NULLS FIRST, q.position
+SELECT q.position, q.question, q.answer_type, q.subsection,
+           a.answer, a.mode, a.updated_at
+    FROM   questions q
+    LEFT JOIN answers a
+           ON a.question_id = q.id
+          AND a.page        = q.page
+          AND a.job_code    = %s
+    WHERE  q.page      = %s
+      AND  q.is_active  = 1
+      AND  q.answer_type != 'likert'
+    ORDER  BY q.subsection NULLS FIRST, q.position
         """, (job_code, page))
     else:
         raise ValueError(f"Invalid job code supplied for Q&A context generation: {job_code}")
@@ -128,7 +128,7 @@ def build_likert_context(job_code: str) -> str:
         SELECT q.id, q.page, q.position, q.question, q.subsection,
                a.answer, a.job_code
         FROM   questions q
-        JOIN   answers a ON a.question_id = q.id AND a.job_code = ?
+        JOIN   answers a ON a.question_id = q.id AND a.job_code = %s
         WHERE  q.answer_type = 'likert'
           AND  q.is_active   = 1
           AND  a.answer IS NOT NULL

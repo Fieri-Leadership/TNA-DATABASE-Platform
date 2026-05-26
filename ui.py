@@ -3,6 +3,7 @@ ui.py — All rendering logic for the QA Analysis Portal.
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 from database import (
     create_job, get_all_jobs, get_job, update_job, delete_job,
     get_questions, add_question, delete_question, update_question_type,
@@ -18,7 +19,29 @@ from logger import get_logger
 
 logger = get_logger()
 
-
+# Script to prevent entering the cohort size in decimal format
+components.html(
+    """
+    <script>
+    const blockDecimals = () => {
+        const inputs = window.parent.document.querySelectorAll('input[type="number"]');
+        inputs.forEach(input => {
+            if (!input.dataset.listenerActive) {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === '.' || e.key === ',' || e.key === 'e' || e.key === 'E') {
+                        e.preventDefault();
+                    }
+                });
+                input.dataset.listenerActive = true;
+            }
+        });
+    };
+    // Run periodically to catch dynamically rendered Streamlit elements
+    setInterval(blockDecimals, 500);
+    </script>
+    """,
+    height=0,
+                )
 # ════════════════════════════════════════════════════════════════════════════
 #  Logo
 # ════════════════════════════════════════════════════════════════════════════
@@ -135,8 +158,8 @@ def render_admin_page():
             with col1:
                 job_code = st.text_input("Job Code *", placeholder="e.g. JOB-2024-001",
                                         help="Unique identifier. Will be uppercased.")
-                client_name = st.text_input("Client Name *", placeholder="e.g. Acme Corporation")
-                cohort_size = st.number_input("Cohort Size *",placeholder=10)
+                client_name = st.text_input("Client Name *", placeholder="e.g. Company name")
+                cohort_size = st.number_input("Cohort Size *",placeholder=10,step=1)
             with col2:
                 sector = st.selectbox("Sector", SECTOR_OPTIONS)
                 description = st.text_area("Description", placeholder="Brief context about this engagement…", height=120)
@@ -180,7 +203,7 @@ def render_admin_page():
                         new_sector = st.selectbox("Sector", SECTOR_OPTIONS,
                                                 index=SECTOR_OPTIONS.index(sector_d) if sector_d in SECTOR_OPTIONS else 0,
                                                 key=f"edit_sector_{job_code_d}")
-                        new_cohort_size = st.text_input("Cohort Size",value=cohort_size_d,key=f"edit_cohort_size_{job_code_d}")
+                        new_cohort_size = st.number_input("Cohort Size", value=cohort_size_d, key=f"edit_cohort_size_{job_code_d}", step=1)
                     with col2:
                         new_desc = st.text_area("Description", value=description_d or "", height=120, key=f"edit_desc_{job_code_d}")
 
