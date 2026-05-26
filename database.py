@@ -1,528 +1,434 @@
-import sqlite3
+"""
+database_postgres.py
+────────────────────
+Supabase / PostgreSQL backend — drop-in replacement for database_sqlite.py
+
+Requirements:
+    pip install psycopg2-binary python-dotenv
+
+Environment variables (add to .env or your deployment secrets):
+    SUPABASE_DB_URL  — full Postgres connection string, e.g.
+        postgresql://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
+        (use the *Session* pooler URL from Supabase → Project Settings → Database → Connection string)
+"""
+
 import os
 import sys
-from datetime import datetime
-import threading
-import streamlit as st
-import libsql
 from contextlib import contextmanager
+from datetime import datetime, timezone
+
+import psycopg2
+import psycopg2.extras          # RealDictCursor (optional, used in helpers)
+from psycopg2 import pool as pg_pool
+import streamlit as st
 
 from logger import get_logger
+
 logger = get_logger()
 
-DB_PATH = "qa_portal.db"
-# Load .env file if present (local dev only)
+# ─── Load environment ─────────────────────────────────────────────────────────
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    logger.error("Error loading variables from the environment.")
-    pass  # dotenv not installed, rely on real environment variables
+    logger.warning("python-dotenv not installed — relying on real environment variables.")
 
-TURSO_DB_NAME = os.environ.get("TURSO_DB_NAME", "").strip()
-TURSO_URL   = os.environ.get("TURSO_URL", "").strip()
-TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "").strip()
-USE_TURSO   = bool(TURSO_URL and TURSO_TOKEN and TURSO_DB_NAME)
+SUPABASE_DB_URL = os.environ.get("SUPABASE_POSTGRES_SP_URI", "").strip()
 
-# @st.cache_resource
-# def _get_turso_conn():
-#     import libsql
-#     try:
-#         conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
-#         return conn
-#     except Exception as e:
-#         logger.error(f"Error connecting database at Turso: {e}", exc_info=True)
-#         raise
+if not SUPABASE_DB_URL:
+    logger.error(
+        "SUPABASE_DB_URL is not set. "
+        "Add it to your .env file or deployment environment and restart."
+    )
+    sys.exit(1)
 
-# logger.info(f"Using database backend: {'Turso' if USE_TURSO else 'SQLite'}")
-# @contextmanager
-# def get_conn():
-#     if USE_TURSO:
-#         conn = _get_turso_conn()
-#         try:
-#             yield conn
-#             conn.commit()
-#         except Exception as e:
-#             logger.error(f"Turso DB error: {e}", exc_info=True)
-#             st.error("Something went wrong with database connection. Contact your admin. ")
-#         # Note: do NOT close — connection is reused across requests
-#     else:
-#         conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-#         try:
-#             yield conn
-#             conn.commit()
-#         except Exception as e:
-#             logger.error(f"Local DB error: {e}", exc_info=True)
-#             raise
-#         finally:
-#             conn.close()
-_lock = threading.Lock()
+
+# ─── Connection pool (created once per Streamlit process) ────────────────────
+#
+#   min/max connections are conservative defaults — tune to your Supabase plan.
+#   Supabase free tier allows ~20 direct connections; the session pooler on
+#   port 6543 supports many more.
 
 @st.cache_resource
-def _get_turso_conn():
-    logger.info("Creating Turso connection")
-
-    return libsql.connect(
-        TURSO_URL,
-        auth_token=TURSO_TOKEN
-    )
-
-
-def _reconnect():
-    logger.warning("Reconnecting Turso database...")
-
+def _get_pool() -> pg_pool.ThreadedConnectionPool:
+    logger.info("Creating Postgres connection pool…")
     try:
-        _get_turso_conn().close()
-    except Exception:
-        pass
-
-    _get_turso_conn.clear()
-
-    return _get_turso_conn()
-
-
-def _ensure_connection(conn):
-    try:
-        conn.execute("SELECT 1")
-        return conn
-
+        p = pg_pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=10,
+            dsn=SUPABASE_DB_URL,
+            connect_timeout=10,
+        )
+        logger.info("Postgres connection pool ready.")
+        return p
     except Exception as e:
-        logger.warning(f"Stale Turso connection detected: {e}")
+        logger.error(f"Could not create connection pool: {e}", exc_info=True)
+        raise
 
-        return _reconnect()
 
+# ─── Context manager — borrow / return a connection ──────────────────────────
 
 @contextmanager
 def get_conn():
+    """
+    Yields a psycopg2 connection from the pool.
+    Commits on clean exit, rolls back on exception, always returns connection
+    to the pool.
+    """
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"DB error (rolled back): {e}", exc_info=True)
+        raise
+    finally:
+        pool.putconn(conn)
 
-    if USE_TURSO:
 
-        with _lock:
+# ─── Low-level helpers ────────────────────────────────────────────────────────
+#
+#   Postgres uses %s placeholders (not ? like SQLite).
+#   These two helpers are the only place that difference matters — every
+#   query string above this line already uses %s.
 
-            conn = _get_turso_conn()
-            conn = _ensure_connection(conn)
-
-        try:
-            yield conn
-            conn.commit()
-
-        except Exception as e:
-
-            logger.error(
-                f"Turso DB error: {e}",
-                exc_info=True
-            )
-
-            # reconnect for next request
-            _reconnect()
-
-            raise
-
-    else:
-
-        conn = sqlite3.connect(
-            DB_PATH,
-            check_same_thread=False
-        )
-
-        try:
-            yield conn
-            conn.commit()
-
-        except Exception as e:
-
-            logger.error(
-                f"Local DB error: {e}",
-                exc_info=True
-            )
-
-            raise
-
-        finally:
-            conn.close()
-
-def init_db():
+def fetchall(sql: str, params: tuple = ()) -> list:
     with get_conn() as conn:
-        try:
-            conn.executescript("""
-            CREATE TABLE IF NOT EXISTS jobs (
-                job_code     TEXT PRIMARY KEY,
-                client_name  TEXT NOT NULL,
-                description  TEXT,
-                sector       TEXT,
-                created_at   TEXT,
-                updated_at   TEXT,
-                cohort_size  INT DEFAULT 10
-            );
-
-            CREATE TABLE IF NOT EXISTS questions (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                page         TEXT NOT NULL,
-                position     INTEGER NOT NULL,
-                question     TEXT NOT NULL,
-                answer_type  TEXT DEFAULT 'text',
-                is_active    INTEGER DEFAULT 1
-            );
-
-            CREATE TABLE IF NOT EXISTS answers (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_code     TEXT NOT NULL,
-                page         TEXT NOT NULL,
-                question_id  INTEGER NOT NULL,
-                answer       TEXT,
-                mode         TEXT DEFAULT 'Manual',
-                updated_at   TEXT,
-                UNIQUE(job_code, page, question_id)
-            );
-            """)
-            # Migration: add answer_type column to existing databases
-            # cols = [r[1] for r in conn.execute("PRAGMA table_info(questions)").fetchall()]
-            # if "answer_type" not in cols:
-            #     conn.execute("ALTER TABLE questions ADD COLUMN answer_type TEXT DEFAULT 'text'")
-            # _seed_default_questions(conn)
-        except Exception as e:
-            logger.critical(f"DB init failed: {e}", exc_info=True)
-            raise
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
 
 
-def _seed_default_questions(conn):
-    """Insert default questions if table is empty."""
-    count = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
-    if count > 0:
-        return
-
-    defaults = {
-        "client": [
-            "What are the primary business objectives driving this engagement?",
-            "What are the key performance indicators (KPIs) for success?",
-            "What challenges or pain points is the client currently experiencing?",
-            "What is the timeline and budget for the project?",
-            "Who are the key stakeholders and decision-makers?",
-            "What previous initiatives or solutions have been attempted?",
-            "What does success look like at the end of this engagement?",
-            "Are there any constraints or non-negotiables we should be aware of?",
-        ],
-        "learner": [
-            "What is the target learner profile and demographic?",
-            "What prior knowledge or experience do learners bring?",
-            "What are the primary learning objectives?",
-            "How will learning be delivered (e.g. online, blended, in-person)?",
-            "What motivates this learner group?",
-            "What barriers to learning might this group face?",
-            "How will learning be assessed or measured?",
-            "What is the expected time commitment for learners?",
-        ],
-        "manager": [
-            "What behaviours or skills should managers reinforce post-training?",
-            "How will line managers support learners on the job?",
-            "What reporting or visibility do managers need on learner progress?",
-            "How will managers be briefed on the programme objectives?",
-            "What role will managers play in the sign-off or completion process?",
-            "What concerns might managers have about releasing staff for training?",
-            "How can managers be engaged as champions of this initiative?",
-            "What follow-up actions will managers be expected to take?",
-        ],
-    }
-
-    for page, questions in defaults.items():
-        for i, q in enumerate(questions):
-            conn.execute(
-                "INSERT INTO questions (page, position, question) VALUES (?, ?, ?)",
-                (page, i, q),
-            )
-
-# ─── Common DB fetch Functions ────────────────────────────────────────────────────────────────
-
-def fetchall(sql, params=()):
+def fetchone(sql: str, params: tuple = ()) -> tuple | None:
     with get_conn() as conn:
-        return conn.execute(sql, params).fetchall()
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchone()
 
 
-def fetchone(sql, params=()):
+def execute(sql: str, params: tuple = ()) -> None:
+    """Run a statement that returns no rows (INSERT / UPDATE / DELETE)."""
     with get_conn() as conn:
-        return conn.execute(sql, params).fetchone()
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+
+
+# ─── Schema verification ──────────────────────────────────────────────────────
 
 def verify_schema() -> None:
+    """Check that all required tables exist; exit with a clear message if not."""
     REQUIRED_TABLES = {"jobs", "questions", "answers"}
-    """
-    Check that all required tables exist in the connected database.
-    Prints a clear diagnostic and exits with code 1 if any are missing.
-    """
     try:
-        rows = fetchall("SELECT name FROM sqlite_master WHERE type='table'")
+        rows = fetchall(
+            "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+        )
     except Exception as e:
-        logger.error(f"\n[ERROR] Could not query database schema: {e}")
-        logger.error("  → Check that TURSO_URL and TURSO_AUTH_TOKEN are correct and point to the right database.")
+        logger.error(f"Could not query database schema: {e}")
+        logger.error("→ Check that SUPABASE_DB_URL is correct and the DB is reachable.")
         sys.exit(1)
- 
+
     found_tables = {row[0] for row in rows}
     missing = REQUIRED_TABLES - found_tables
- 
+
     if missing:
-        logger.error("\n[ERROR] Connected to the database but required tables are missing.")
+        logger.error("Connected to Postgres but required tables are missing.")
         logger.error(f"  Expected : {', '.join(sorted(REQUIRED_TABLES))}")
-        logger.error(f"  Found    : {', '.join(sorted(found_tables)) or '(no tables)'}")
+        logger.error(f"  Found    : {', '.join(sorted(found_tables)) or '(none)'}")
         logger.error(f"  Missing  : {', '.join(sorted(missing))}")
-        logger.error("\n  → You are likely connected to the wrong database.")
-        logger.error("     Run:  turso db list")
-        logger.error("     Then: turso db show <correct-db-name>  to get the right URL.")
+        logger.error("→ Verify you are pointing at the correct Supabase project.")
         sys.exit(1)
- 
-    logger.info(f"  Schema OK — tables verified: {', '.join(sorted(REQUIRED_TABLES))}")
 
-# ─── Job CRUD and helper functions ────────────────────────────────────────────────────────────────
+    logger.info(f"Schema OK — tables verified: {', '.join(sorted(REQUIRED_TABLES))}")
 
-def create_job(job_code, client_name, description, sector,cohort_size):
+
+# ─── Timestamp helper ─────────────────────────────────────────────────────────
+
+def _now() -> str:
+    """ISO-8601 UTC timestamp string — consistent with the old SQLite code."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ─── Job CRUD ─────────────────────────────────────────────────────────────────
+
+def create_job(job_code: str, client_name: str, description: str,
+               sector: str, cohort_size: int) -> None:
     logger.info(f"Creating job: {job_code.upper()} — {client_name}")
-    now = datetime.now().isoformat()
+    now = _now()
     try:
-        with get_conn() as conn:
-            conn.execute(
-                "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (job_code.upper(), client_name, description, sector,now, now, cohort_size),
-            )
+        execute(
+            "INSERT INTO jobs VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (job_code.upper(), client_name, description, sector, now, now, cohort_size),
+        )
     except Exception as e:
         logger.error(f"Failed to create job {job_code}: {e}", exc_info=True)
         raise
 
 
-def get_all_jobs():
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT job_code, client_name, sector, cohort_size FROM jobs ORDER BY created_at DESC"
-        ).fetchall()
-    return rows
+def get_all_jobs() -> list:
+    return fetchall(
+        "SELECT job_code, client_name, sector, cohort_size FROM jobs ORDER BY created_at DESC"
+    )
 
 
-def get_job(job_code):
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM jobs WHERE job_code = ?", (job_code.upper(),)
-        ).fetchone()
-    return row
+def get_job(job_code: str) -> tuple | None:
+    return fetchone(
+        "SELECT * FROM jobs WHERE job_code = %s",
+        (job_code.upper(),),
+    )
 
 
-def update_job(job_code, client_name, description, sector,cohort_size):
-    now = datetime.now().isoformat()
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE jobs SET client_name=?, description=?, sector=?, updated_at=?, cohort_size=? WHERE job_code=?",
-            (client_name, description, sector,now,cohort_size, job_code.upper()),
-        )
+def update_job(job_code: str, client_name: str, description: str,
+               sector: str, cohort_size: int) -> None:
+    execute(
+        """UPDATE jobs
+              SET client_name=%s, description=%s, sector=%s,
+                  updated_at=%s, cohort_size=%s
+            WHERE job_code=%s""",
+        (client_name, description, sector, _now(), cohort_size, job_code.upper()),
+    )
 
 
-def delete_job(job_code):
+def delete_job(job_code: str) -> None:
     logger.warning(f"Deleting job and all answers: {job_code}")
     try:
+        # Single round-trip: delete answers first (FK), then the job
         with get_conn() as conn:
-            conn.execute("DELETE FROM jobs WHERE job_code = ?", (job_code.upper(),))
-            conn.execute("DELETE FROM answers WHERE job_code = ?", (job_code.upper(),))
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM answers WHERE job_code = %s", (job_code.upper(),)
+                )
+                cur.execute(
+                    "DELETE FROM jobs WHERE job_code = %s", (job_code.upper(),)
+                )
     except Exception as e:
         logger.error(f"Failed to delete job {job_code}: {e}", exc_info=True)
         raise
 
 
 def verify_job_exists(job_code: str) -> None:
-    """
-    Check that the given job_code exists in the jobs table.
-    Prints a clear diagnostic and exits with code 1 if not found.
-    """
-    row = fetchone("SELECT job_code, client_name FROM jobs WHERE job_code = ?", (job_code,))
+    row = fetchone(
+        "SELECT job_code, client_name FROM jobs WHERE job_code = %s",
+        (job_code,),
+    )
     if not row:
-        # Show available job codes to help the user pick the right one
-        available = fetchall("SELECT job_code, client_name FROM jobs ORDER BY job_code")
-        logger.error(f"\n[ERROR] Job code '{job_code}' not found in the jobs table.")
+        available = fetchall(
+            "SELECT job_code, client_name FROM jobs ORDER BY job_code"
+        )
+        logger.error(f"Job code '{job_code}' not found in the jobs table.")
         if available:
-            logger.error(f"  Available job codes:")
             for jc, name in available:
                 logger.error(f"    - {jc}  ({name})")
         else:
             logger.error("  The jobs table is empty — no jobs have been created yet.")
         sys.exit(1)
-    logger.debug(f"  Job OK — '{job_code}' found: {row[1]}")
+    logger.debug(f"Job OK — '{job_code}' found: {row[1]}")
 
-def get_job_metadata(job_code:str)->list[str]:
+
+def get_job_metadata(job_code: str) -> list[str]:
     job_row = fetchone(
-            "SELECT job_code, client_name, description, sector, cohort_size FROM jobs WHERE job_code = ?",
-            (job_code,))
-    job_lines=[]
+        "SELECT job_code, client_name, description, sector, cohort_size"
+        "  FROM jobs WHERE job_code = %s",
+        (job_code,),
+    )
+    lines = []
     if job_row:
         job_code_val, client_name, description, sector, cohort_size = job_row
-        job_lines.append(f"- Job Code: {job_code_val}")
-        job_lines.append(f"- Client: {client_name}")
-        job_lines.append(f"- Sector: {sector or 'N/A'}")
-        job_lines.append(f"- Cohort Size: {cohort_size or 'N/A'}")
+        lines.append(f"- Job Code: {job_code_val}")
+        lines.append(f"- Client: {client_name}")
+        lines.append(f"- Sector: {sector or 'N/A'}")
+        lines.append(f"- Cohort Size: {cohort_size or 'N/A'}")
         if description:
-            job_lines.append(f"- Description: {description}")
-    return job_lines
+            lines.append(f"- Description: {description}")
+    return lines
 
-# ─── Question CRUD ──────────────────────────────────────────────────────────
 
-def get_questions(page):
+# ─── Question CRUD ────────────────────────────────────────────────────────────
+
+def get_questions(page: str) -> list:
+    return fetchall(
+        """SELECT id, question, position, subsection, answer_type
+             FROM questions
+            WHERE page=%s AND is_active=1
+            ORDER BY position""",
+        (page,),
+    )
+
+
+def add_question(page: str, question_text: str, subsection_text: str,
+                 answer_type: str = "text") -> None:
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT id, question, position,subsection, answer_type FROM questions WHERE page=? AND is_active=1 ORDER BY position",
-            (page,),
-        ).fetchall()
-    return rows
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(MAX(position), -1) FROM questions WHERE page=%s",
+                (page,),
+            )
+            max_pos = cur.fetchone()[0]
+            cur.execute(
+                """INSERT INTO questions (page, position, question, subsection, answer_type)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (page, max_pos + 1, question_text, subsection_text, answer_type),
+            )
 
 
-def add_question(page, question_text, subsection_text, answer_type="text"):
-    with get_conn() as conn:
-        max_pos = conn.execute(
-            "SELECT COALESCE(MAX(position), -1) FROM questions WHERE page=?", (page,)
-        ).fetchone()[0]
-        conn.execute(
-            "INSERT INTO questions (page, position, question, subsection,answer_type) VALUES (?, ?, ? , ?, ?)",
-            (page, max_pos + 1, question_text,subsection_text, answer_type),
-        )
+def delete_question(question_id: int) -> None:
+    execute("UPDATE questions SET is_active=0 WHERE id=%s", (question_id,))
 
 
-def delete_question(question_id):
-    with get_conn() as conn:
-        conn.execute("UPDATE questions SET is_active=0 WHERE id=?", (question_id,))
+def update_question_type(question_id: int, answer_type: str) -> None:
+    execute(
+        "UPDATE questions SET answer_type=%s WHERE id=%s",
+        (answer_type, question_id),
+    )
 
 
-def update_question_type(question_id, answer_type):
-    with get_conn() as conn:
-        conn.execute("UPDATE questions SET answer_type=? WHERE id=?", (answer_type, question_id))
+def update_question(question_id: int, question_text: str, subsection: str) -> None:
+    execute(
+        "UPDATE questions SET question=%s, subsection=%s WHERE id=%s",
+        (question_text, subsection, question_id),
+    )
 
-def update_question(question_id, question_text, subsection):
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE questions SET question=?, subsection=? WHERE id=?",
-            (question_text, subsection, question_id)
-        )
 
-# ─── Answer CRUD ─────────────────────────────────────────────────────────────
+# ─── Answer CRUD ──────────────────────────────────────────────────────────────
 
-def get_answers(job_code, page):
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT question_id, answer, mode FROM answers WHERE job_code=? AND page=?",
-            (job_code.upper(), page),
-        ).fetchall()
+def get_answers(job_code: str, page: str) -> dict:
+    rows = fetchall(
+        "SELECT question_id, answer, mode FROM answers WHERE job_code=%s AND page=%s",
+        (job_code.upper(), page),
+    )
     return {r[0]: {"answer": r[1], "mode": r[2]} for r in rows}
 
 
-def save_answer(job_code, page, question_id, answer, mode="Manual"):
+def save_answer(job_code: str, page: str, question_id: int,
+                answer: str, mode: str = "Manual") -> None:
+    """Upsert an answer row — Postgres native ON CONFLICT … DO UPDATE."""
     try:
-        now = datetime.now().isoformat()
-        with get_conn() as conn:
-            conn.execute(
-                """INSERT INTO answers (job_code, page, question_id, answer, mode, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(job_code, page, question_id)
-                DO UPDATE SET answer=excluded.answer, mode=excluded.mode, updated_at=excluded.updated_at""",
-                (job_code.upper(), page, question_id, answer, mode, now),
-            )
+        execute(
+            """INSERT INTO answers (job_code, page, question_id, answer, mode, updated_at)
+               VALUES (%s, %s, %s, %s, %s, %s)
+               ON CONFLICT (job_code, page, question_id)
+               DO UPDATE SET
+                   answer     = EXCLUDED.answer,
+                   mode       = EXCLUDED.mode,
+                   updated_at = EXCLUDED.updated_at""",
+            (job_code.upper(), page, question_id, answer, mode, _now()),
+        )
     except Exception as e:
-        logger.error(f"Failed to save answer — job:{job_code} q:{question_id}: {e}", exc_info=True)
+        logger.error(
+            f"Failed to save answer — job:{job_code} q:{question_id}: {e}",
+            exc_info=True,
+        )
         raise
 
 
-def clear_answers(job_code, page):
+def clear_answers(job_code: str, page: str) -> None:
+    execute(
+        "DELETE FROM answers WHERE job_code=%s AND page=%s",
+        (job_code.upper(), page),
+    )
+
+
+# ─── Research tables ──────────────────────────────────────────────────────────
+#
+#   Postgres does not support executescript().
+#   Each CREATE TABLE is run separately inside one transaction.
+
+def init_research_tables() -> None:
     with get_conn() as conn:
-        conn.execute(
-            "DELETE FROM answers WHERE job_code=? AND page=?",
-            (job_code.upper(), page),
-        )
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS research_topics (
+                    id         SERIAL PRIMARY KEY,
+                    name       TEXT NOT NULL,
+                    created_at TEXT
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS research_items (
+                    id         SERIAL PRIMARY KEY,
+                    topic_id   INTEGER NOT NULL REFERENCES research_topics(id),
+                    title      TEXT NOT NULL,
+                    link       TEXT,
+                    summary    TEXT,
+                    content    TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )
+            """)
 
 
-# ─── Research Base ───────────────────────────────────────────────────────────
+def get_research_topics() -> list:
+    return fetchall("SELECT id, name FROM research_topics ORDER BY name")
 
-def init_research_tables():
+
+def add_research_topic(name: str) -> None:
+    execute(
+        "INSERT INTO research_topics (name, created_at) VALUES (%s, %s)",
+        (name, _now()),
+    )
+
+
+def delete_research_topic(topic_id: int) -> None:
     with get_conn() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS research_topics (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            name       TEXT NOT NULL,
-            created_at TEXT
-        );
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM research_items WHERE topic_id=%s", (topic_id,))
+            cur.execute("DELETE FROM research_topics WHERE id=%s", (topic_id,))
 
-        CREATE TABLE IF NOT EXISTS research_items (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            topic_id   INTEGER NOT NULL,
-            title      TEXT NOT NULL,
-            link       TEXT,
-            summary    TEXT,
-            content    TEXT,
-            created_at TEXT,
-            updated_at TEXT,
-            FOREIGN KEY (topic_id) REFERENCES research_topics(id)
-        );
-        """)
 
-def get_research_topics():
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT id, name FROM research_topics ORDER BY name"
-        ).fetchall()
+def get_research_items(topic_id: int) -> list:
+    return fetchall(
+        "SELECT id, title, link, summary, content"
+        "  FROM research_items WHERE topic_id=%s ORDER BY title",
+        (topic_id,),
+    )
 
-def add_research_topic(name):
-    now = datetime.now().isoformat()
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO research_topics (name, created_at) VALUES (?, ?)",
-            (name, now)
-        )
 
-def delete_research_topic(topic_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM research_items WHERE topic_id=?", (topic_id,))
-        conn.execute("DELETE FROM research_topics WHERE id=?", (topic_id,))
+def add_research_item(topic_id: int, title: str, link: str,
+                      summary: str, content: str) -> None:
+    now = _now()
+    execute(
+        """INSERT INTO research_items
+               (topic_id, title, link, summary, content, created_at, updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (topic_id, title, link, summary, content, now, now),
+    )
 
-def get_research_items(topic_id):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT id, title, link, summary, content FROM research_items WHERE topic_id=? ORDER BY title",
-            (topic_id,)
-        ).fetchall()
 
-def add_research_item(topic_id, title, link, summary, content):
-    now = datetime.now().isoformat()
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO research_items (topic_id, title, link, summary, content, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-            (topic_id, title, link, summary, content, now, now)
-        )
+def update_research_item(item_id: int, title: str, link: str,
+                         summary: str, content: str) -> None:
+    execute(
+        """UPDATE research_items
+              SET title=%s, link=%s, summary=%s, content=%s, updated_at=%s
+            WHERE id=%s""",
+        (title, link, summary, content, _now(), item_id),
+    )
 
-def update_research_item(item_id, title, link, summary, content):
-    now = datetime.now().isoformat()
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE research_items SET title=?, link=?, summary=?, content=?, updated_at=? WHERE id=?",
-            (title, link, summary, content, now, item_id)
-        )
 
-def delete_research_item(item_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM research_items WHERE id=?", (item_id,))
+def delete_research_item(item_id: int) -> None:
+    execute("DELETE FROM research_items WHERE id=%s", (item_id,))
 
-# ─── TNA Report ───────────────────────────────────────────────────────────
 
-def save_tna_report(job_code: str, requested_by: str, report_content: str):
-    """Save a generated TNA report to the database."""
-    now = datetime.now().isoformat()
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO tna_reports (requested_by, request_timestamp, report_content, job_code)
-               VALUES (?, ?, ?, ?)""",
-            (requested_by, now, report_content, job_code.upper())
-        )
+# ─── TNA Report ───────────────────────────────────────────────────────────────
+
+def save_tna_report(job_code: str, requested_by: str, report_content: str) -> None:
+    execute(
+        """INSERT INTO tna_reports (requested_by, request_timestamp, report_content, job_code)
+           VALUES (%s, %s, %s, %s)""",
+        (requested_by, _now(), report_content, job_code.upper()),
+    )
     logger.info(f"TNA report saved — job:{job_code} user:{requested_by}")
 
 
 def get_latest_tna_report(job_code: str, requested_by: str) -> str | None:
-    """Fetch the most recent report for a given job and user. Returns None if not found."""
-    with get_conn() as conn:
-        row = conn.execute(
-            """SELECT report_content FROM tna_reports
-               WHERE job_code = ? AND requested_by = ?
-               ORDER BY request_timestamp DESC
-               LIMIT 1""",
-            (job_code.upper(), requested_by)
-        ).fetchone()
+    row = fetchone(
+        """SELECT report_content FROM tna_reports
+            WHERE job_code=%s AND requested_by=%s
+            ORDER BY request_timestamp DESC
+            LIMIT 1""",
+        (job_code.upper(), requested_by),
+    )
     if row:
         logger.debug(f"TNA report fetched — job:{job_code} user:{requested_by}")
         return row[0]
